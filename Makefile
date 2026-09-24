@@ -31,7 +31,10 @@ PB_COPY := $(BUILD_DIR)/pbcopy
 PB_PASTE := $(BUILD_DIR)/pbpaste
 PB_OBJS := $(OBJDIR)/pbcopy.o
 
-all: $(PB_COPY) $(PB_PASTE)
+OPEN_BIN := $(BUILD_DIR)/open
+OPEN_OBJS := $(OBJDIR)/open.o
+
+all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN)
 
 $(PB_COPY): $(PB_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -44,6 +47,16 @@ $(PB_PASTE): $(PB_OBJS)
 $(OBJDIR)/pbcopy.o: src/pbcopy/pbcopy.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/pbcopy/pbcopy.m
+
+$(OPEN_BIN): $(OPEN_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(MFLAGS) -o $@ $(OPEN_OBJS) -framework Cocoa -framework Foundation \
+	    -framework AppKit -framework CoreFoundation -framework ApplicationServices \
+	    -framework CoreServices -lobjc
+
+$(OBJDIR)/open.o: src/open/open.m
+	@mkdir -p $(OBJDIR)
+	$(CC) $(MFLAGS) -c -o $@ src/open/open.m
 
 test: all
 

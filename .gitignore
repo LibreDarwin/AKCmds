@@ -1,0 +1,9 @@
+.DS_Store
+*.o
+*.a
+*.tmp
+build/
+Build/
+local/
+__pycache__/
+*.pyc

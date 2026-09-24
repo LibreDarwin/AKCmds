@@ -34,7 +34,10 @@ PB_OBJS := $(OBJDIR)/pbcopy.o
 OPEN_BIN := $(BUILD_DIR)/open
 OPEN_OBJS := $(OBJDIR)/open.o
 
-all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN)
+TIFF2ICNS_BIN := $(BUILD_DIR)/tiff2icns
+TIFF2ICNS_OBJS := $(OBJDIR)/tiff2icns.o
+
+all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN)
 
 $(PB_COPY): $(PB_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -57,6 +60,16 @@ $(OPEN_BIN): $(OPEN_OBJS)
 $(OBJDIR)/open.o: src/open/open.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/open/open.m
+
+$(TIFF2ICNS_BIN): $(TIFF2ICNS_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(MFLAGS) -o $@ $(TIFF2ICNS_OBJS) -framework Cocoa -framework Foundation \
+	    -framework AppKit -framework CoreFoundation -framework CoreServices \
+	    -framework ImageIO -lobjc
+
+$(OBJDIR)/tiff2icns.o: src/tiff2icns/tiff2icns.m
+	@mkdir -p $(OBJDIR)
+	$(CC) $(MFLAGS) -c -o $@ src/tiff2icns/tiff2icns.m
 
 test: all
 

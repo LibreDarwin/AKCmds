@@ -1,0 +1,60 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/pbcopy and /usr/bin/pbpaste.
+.TH PBCOPY 1 "September 24, 2026" "LibreDarwin"
+.SH NAME
+\fBpbcopy\fR, \fBpbpaste\fR \- copy data to and from the pasteboard (Clipboard)
+.SH SYNOPSIS
+.B pbcopy
+[\fB\-help\fR] [\fB\-pboard\fR {\fBgeneral\fR | \fBruler\fR | \fBfind\fR | \fBfont\fR}]
+.PP
+.B pbpaste
+[\fB\-help\fR] [\fB\-pboard\fR {\fBgeneral\fR | \fBruler\fR | \fBfind\fR | \fBfont\fR}]
+[\fB\-Prefer\fR {\fBtxt\fR | \fBrtf\fR | \fBps\fR}]
+.SH DESCRIPTION
+.B pbcopy
+reads standard input and stores it on the named pasteboard.
+When no pasteboard is given, the general pasteboard is used.
+Input is held as plain text unless it begins with the Encapsulated
+PostScript (EPS) file header or the Rich Text Format (RTF) file
+header, in which case it is stored under the matching type.
+.PP
+.B pbpaste
+writes the first available pasteboard item to standard output in the
+given preference order: an explicit
+.B \-Prefer
+argument first, then plain text, Encapsulated PostScript, and Rich
+Text Format.  If none of those types is present, it produces no
+output.
+.PP
+Both programs take their text encoding from the locale environment
+variables, falling back to the C encoding when one cannot be
+determined.  For example, setting LANG=en_US.UTF-8 selects UTF-8 for
+input and output.  Use of UTF-8 is recommended; Terminal.app sets the
+locale it uses accordingly.
+.SH OPTIONS
+.TP
+.BI \-pboard \ {general | ruler | find | font}
+Select the pasteboard.
+.B general
+is the default.
+.TP
+.BI \-Prefer \ {txt | rtf | ps}
+Select the type of data
+.B pbpaste
+looks for first.  Without it the search order is plain text,
+Encapsulated PostScript, then Rich Text Format.
+The
+.B txt
+option names a preference for plain text; the deprecated
+.B ascii
+option is also accepted.
+.SH SEE ALSO
+.BR open (1),
+.BR textutil (1),
+.BR tiffutil (1)
+.SH BUGS
+There is no way to tell
+.B pbpaste
+to get only a specified data type.

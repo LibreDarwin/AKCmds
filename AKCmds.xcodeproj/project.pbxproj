@@ -1,0 +1,299 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000010000000000000001 /* pbcopy.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000001 /* pbcopy.m */; };
+		A10000010000000000000002 /* pbcopy.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000001 /* pbcopy.m */; };
+		A10000010000000000000003 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000002 /* Cocoa.framework */; };
+		A10000010000000000000004 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000003 /* Foundation.framework */; };
+		A10000010000000000000005 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000004 /* AppKit.framework */; };
+		A10000010000000000000006 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000005 /* CoreFoundation.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000010000000000000001 /* pbcopy */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pbcopy; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000010000000000000002 /* pbpaste */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pbpaste; sourceTree = BUILT_PRODUCTS_DIR; };
+		A30000010000000000000001 /* pbcopy.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = pbcopy.m; sourceTree = "<group>"; };
+		A40000010000000000000002 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
+		A40000010000000000000003 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		A40000010000000000000004 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		A40000010000000000000005 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A50000010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000003 /* Cocoa.framework in Frameworks */,
+				A10000010000000000000004 /* Foundation.framework in Frameworks */,
+				A10000010000000000000005 /* AppKit.framework in Frameworks */,
+				A10000010000000000000006 /* CoreFoundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A50000010000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000003 /* Cocoa.framework in Frameworks */,
+				A10000010000000000000004 /* Foundation.framework in Frameworks */,
+				A10000010000000000000005 /* AppKit.framework in Frameworks */,
+				A10000010000000000000006 /* CoreFoundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A60000050000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A60000020000000000000003 /* src */,
+				A60000030000000000000004 /* Frameworks */,
+				A90000040000000000000002 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A60000020000000000000003 /* src */ = {
+			isa = PBXGroup;
+			children = (
+				A60000050000000000000002 /* pbcopy */,
+			);
+			path = src;
+			sourceTree = "<group>";
+		};
+		A60000050000000000000002 /* pbcopy */ = {
+			isa = PBXGroup;
+			children = (
+				A30000010000000000000001 /* pbcopy.m */,
+			);
+			path = pbcopy;
+			sourceTree = "<group>";
+		};
+		A60000030000000000000004 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A40000010000000000000002 /* Cocoa.framework */,
+				A40000010000000000000003 /* Foundation.framework */,
+				A40000010000000000000004 /* AppKit.framework */,
+				A40000010000000000000005 /* CoreFoundation.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A90000040000000000000002 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000010000000000000001 /* pbcopy */,
+				A20000010000000000000002 /* pbpaste */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A70000010000000000000001 /* pbcopy */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000010000000000000001 /* Build configuration list for PBXNativeTarget "pbcopy" */;
+			buildPhases = (
+				A50000010000000000000003 /* Sources */,
+				A50000010000000000000001 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = pbcopy;
+			productName = pbcopy;
+			productReference = A20000010000000000000001 /* pbcopy */;
+			productType = "com.apple.product-type.tool";
+		};
+		A70000010000000000000002 /* pbpaste */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000010000000000000002 /* Build configuration list for PBXNativeTarget "pbpaste" */;
+			buildPhases = (
+				A50000010000000000000004 /* Sources */,
+				A50000010000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = pbpaste;
+			productName = pbpaste;
+			productReference = A20000010000000000000002 /* pbpaste */;
+			productType = "com.apple.product-type.tool";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A60000010000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = A80000010000000000000003 /* Build configuration list for PBXProject "AKCmds" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A60000050000000000000001;
+			productRefGroup = A90000040000000000000002 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A70000010000000000000001 /* pbcopy */,
+				A70000010000000000000002 /* pbpaste */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A50000010000000000000003 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000001 /* pbcopy.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A50000010000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000002 /* pbcopy.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A80000010000000000000004 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_ENABLE_OBJC_EXCEPTIONS = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				OBJROOT = "$(SRCROOT)/build/xcode";
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SYMROOT = "$(SRCROOT)/build/xcode";
+			};
+			name = Debug;
+		};
+		A80000010000000000000005 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = NO;
+				CLANG_ENABLE_OBJC_EXCEPTIONS = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = NO;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_OPTIMIZATION_LEVEL = 2;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				OBJROOT = "$(SRCROOT)/build/xcode";
+				SDKROOT = macosx;
+				SYMROOT = "$(SRCROOT)/build/xcode";
+			};
+			name = Release;
+		};
+		A80000010000000000000006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A80000010000000000000007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		A80000010000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A80000010000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000010000000000000001 /* Build configuration list for PBXNativeTarget "pbcopy" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000010000000000000006 /* Debug */,
+				A80000010000000000000007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000010000000000000002 /* Build configuration list for PBXNativeTarget "pbpaste" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000010000000000000008 /* Debug */,
+				A80000010000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000010000000000000003 /* Build configuration list for PBXProject "AKCmds" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000010000000000000004 /* Debug */,
+				A80000010000000000000005 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A60000010000000000000001 /* Project object */;
+}

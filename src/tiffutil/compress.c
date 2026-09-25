@@ -143,16 +143,25 @@ fail:
 }
 
 int
-packbits_encode(const unsigned char *in, size_t inlen, unsigned char **out,
-    size_t *outlen)
+packbits_encode(const unsigned char *in, size_t inlen, size_t rowbytes,
+    unsigned char **out, size_t *outlen)
 {
 	buf_t b = {NULL, 0, 0};
 	size_t i = 0;
 
+	if (rowbytes == 0)
+		rowbytes = inlen;
 	while (i < inlen) {
-		/* Find the run starting here. */
+		/* Each row is encoded on its own, so neither a run nor a block of
+		 * literals is allowed to cross a row edge. The edge is taken from
+		 * the row grid, not from i, or a run partway through a row would
+		 * slide the boundary along with it. */
+		size_t rowend = (i / rowbytes + 1) * rowbytes;
 		size_t run = 1;
-		while (i + run < inlen && in[i + run] == in[i] && run < 128)
+
+		if (rowend > inlen)
+			rowend = inlen;
+		while (i + run < rowend && in[i + run] == in[i] && run < 128)
 			run++;
 		if (run >= 3) {
 			if (buf_u8(&b, (unsigned)(257 - run)) < 0 ||
@@ -164,8 +173,8 @@ packbits_encode(const unsigned char *in, size_t inlen, unsigned char **out,
 		/* Otherwise emit literals until a run worth encoding appears. */
 		{
 			size_t lit = 0;
-			while (i + lit < inlen && lit < 128) {
-				if (i + lit + 2 < inlen &&
+			while (i + lit < rowend && lit < 128) {
+				if (i + lit + 2 < rowend &&
 				    in[i + lit] == in[i + lit + 1] &&
 				    in[i + lit] == in[i + lit + 2])
 					break;

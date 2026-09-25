@@ -173,7 +173,9 @@ encode_one(const tuimg_t *im, int compression, unsigned char **out,
 			return -1;
 		}
 	} else if (compression == COMP_PACKBITS) {
-		if (packbits_encode(raw, rawlen, &st, &stlen) < 0) {
+		if (packbits_encode(raw, rawlen,
+		    (size_t)im->width * im->spp * ((im->bps + 7) / 8),
+		    &st, &stlen) < 0) {
 			free(raw);
 			return -1;
 		}

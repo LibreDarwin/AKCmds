@@ -66,7 +66,8 @@ int lzw_decode(const unsigned char *in, size_t inlen, unsigned char **out,
     size_t *outlen);
 int lzw_encode(const unsigned char *in, size_t inlen, unsigned char **out,
     size_t *outlen);
-int packbits_encode(const unsigned char *in, size_t inlen, unsigned char **out,
+int packbits_encode(const unsigned char *in, size_t inlen, size_t rowbytes,
+    unsigned char **out,
     size_t *outlen);
 int packbits_decode(const unsigned char *in, size_t inlen, unsigned char **out,
     size_t *outlen);

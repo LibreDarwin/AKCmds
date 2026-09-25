@@ -103,6 +103,7 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	wfield_t f[32];
 	int placed[32], extseq[32], next_;
 	int nf = 0, n = 0;
+	size_t pad;
 	uint32_t ifd_off, xres_num = 72, yres_num = 72, ncolor = 0;
 	size_t ext_base, cur;
 
@@ -168,8 +169,11 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 			TAG_SAMPLEFORMAT, TAG_EXTRASAMPLES, TAG_ICCPROFILE
 		};
 
-		ifd_off = (uint32_t)(8 + im->striplen);
-		ext_base = 8 + im->striplen + 2 + (size_t)12 * nf + 4;
+		/* The directory starts on an even offset, so an odd-length strip
+		 * is followed by a pad byte. */
+		pad = (8 + im->striplen) & 1;
+		ifd_off = (uint32_t)(8 + im->striplen + pad);
+		ext_base = 8 + im->striplen + pad + 2 + (size_t)12 * nf + 4;
 		cur = ext_base;
 		for (size_t k = 0; k < sizeof(ext_order) / sizeof(ext_order[0]); k++) {
 			for (int i = 0; i < nf; i++) {
@@ -213,6 +217,8 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	    buf_u32(out, ifd_off) < 0)
 		return -1;
 	if (buf_put(out, im->strip, im->striplen) < 0)
+		return -1;
+	if (pad && buf_u8(out, 0) < 0)
 		return -1;
 	if (buf_u16(out, (unsigned)n) < 0)
 		return -1;

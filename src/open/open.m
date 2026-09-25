@@ -155,6 +155,30 @@ o_cancelled(void)
 	die([NSString stringWithFormat:@"Cancelled."]);
 }
 
+static BOOL
+o_hasURLScheme(NSString *arg)
+{
+	NSUInteger i, n = [arg length];
+	unichar c;
+
+	if (n == 0)
+		return NO;
+	c = [arg characterAtIndex:0];
+	if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
+		return NO;
+	for (i = 1; i < n; i++) {
+		c = [arg characterAtIndex:i];
+		if (c == ':')
+			return YES;
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		    (c >= '0' && c <= '9') || c == '+' || c == '-' ||
+		    c == '.')
+			continue;
+		return NO;
+	}
+	return NO;
+}
+
 /*
  * Join a list of strings with the given conjunction ("and"/"or"):
  * "A", "A and B", "A, B, C and D".
@@ -222,6 +246,27 @@ o_file_suggestion(NSArray *possibles)
 			    [NSString stringWithString:p]];
 	}
 	return @"";
+}
+
+/* "The URL%s %@ do%s not refer to a file.%" */
+static void
+o_dieNoFileURL(NSArray *args, NSArray *others)
+{
+	NSUInteger n = [args count];
+	if (n == 0)
+		return;
+	BOOL one = (n == 1);
+	NSString *suffix = @"";
+	NSString *first = [args objectAtIndex:0];
+	if (one && [others count] == 1 && [first hasPrefix:@"file://"])
+		suffix = [NSString stringWithFormat:
+		    @"\nPerhaps you meant 'file:///%@'?",
+		    [first substringFromIndex:7]];
+	die([NSString stringWithFormat:@"The URL%s %@ do%s not refer to a file.%@",
+	    one ? "" : "s",
+	    o_join(args, @"and"),
+	    one ? "es" : "",
+	    suffix]);
 }
 
 /* "The file%s %@ do%s not exist.%" */
@@ -777,6 +822,7 @@ main(int argc, char **argv)
 {
 	NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
 	NSMutableArray *files = [NSMutableArray array];	/* SP+128 */
+	NSMutableArray *badFileURLs = [NSMutableArray array];
 	NSMutableArray *urls = [NSMutableArray array];	/* SP+112 */
 	NSMutableArray *args = nil;			/* SP+48 */
 	NSString *appName = nil;			/* SP+56 */
@@ -812,7 +858,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	opterr = 0;
 	optreset = 1;
 	while (1) {
 		int c = getopt_long(argc, argv,
@@ -932,26 +977,9 @@ main(int argc, char **argv)
 			break;
 		}
 		case 'v':
-		case 'x':
 			break;
 		default:
 			break;
-		}
-	}
-
-	/* --arch validation */
-	if (arch != nil) {
-		BOOL ok = NO;
-		NSString *lower = [arch lowercaseString];
-		for (int i = 0; o_archs[i] != NULL; i++)
-			if ([lower isEqualToString:
-			    [NSString stringWithUTF8String:o_archs[i]]]) {
-				ok = YES;
-				break;
-			}
-		if (!ok) {
-			die([NSString stringWithFormat:
-			    @"Unable to decode architecture option %@", arch]);
 		}
 	}
 
@@ -984,8 +1012,6 @@ main(int argc, char **argv)
 		defaultEditor = LSCopyDefaultApplicationURLForContentType(
 		    CFSTR("txt"), kLSRolesEditor, NULL);
 		if (defaultEditor == NULL) {
-			fputs("LSCopyDefaultApplicationURLForContentType(\"txt\") failed while trying to determine the default text editor.  TextEdit will be used instead.\n",
-			    stderr);
 			appString = @"com.apple.TextEdit";
 			defaultEditor = NULL;
 		}
@@ -1125,33 +1151,17 @@ main(int argc, char **argv)
 		 * path, a URL, or an ambiguous both.
 		 */
 		for (NSString *arg in postOptFiles) {
-			if ([arg rangeOfString:@":"].location == NSNotFound) {
+			if (!o_hasURLScheme(arg)) {
 				/* plain file path */
 				[files addObject:[NSURL fileURLWithPath:arg]];
 				continue;
 			}
-			/* contains ":" */
-			if ([arg length] == 0)
-				o_dieBadQuote("");
+			if ([[arg lowercaseString] hasPrefix:@"file:"]) {
+				NSURL *fu = [NSURL URLWithString:arg];
+				if (fu == nil || [[fu path] length] == 0)
+					[badFileURLs addObject:arg];
+			}
 			NSURL *fileURL = [NSURL fileURLWithPath:arg];
-			NSString *scheme = [fileURL scheme];
-			BOOL looksURL = NO;
-			if (scheme != nil && ![scheme isEqualToString:@"file"]) {
-				NSURL *u = [NSURL URLWithString:arg];
-				if (u != nil) {
-					CFURLRef def = LSCopyDefaultApplicationURLForURL(
-					    (CFURLRef)u, kLSRolesAll, NULL);
-					if (def != NULL) {
-						CFRelease(def);
-						looksURL = YES;
-					}
-				}
-			}
-			if (looksURL) {
-				NSURL *u = [NSURL URLWithString:arg];
-				[files addObject:u];
-				continue;
-			}
 			if (![[NSFileManager defaultManager] fileExistsAtPath:arg]) {
 				/* not a file; hand to LS as a URL */
 				[files addObject:[NSURL URLWithString:arg] ?: (id)[NSURL fileURLWithPath:arg]];
@@ -1188,6 +1198,8 @@ main(int argc, char **argv)
 		}
 	}
 
+	o_dieNoFileURL(badFileURLs, postOptFiles);
+
 	/* missing-file die; must precede -a/-b resolution */
 	o_dieFileMissing(files, postOptFiles);
 
@@ -1219,6 +1231,21 @@ main(int argc, char **argv)
 
 	if ([opened count] == 0 && appString == nil && defaultEditor == NULL)
 		usage();
+
+	if (arch != nil) {
+		BOOL ok = NO;
+		NSString *lower = [arch lowercaseString];
+		for (int i = 0; o_archs[i] != NULL; i++)
+			if ([lower isEqualToString:
+			    [NSString stringWithUTF8String:o_archs[i]]]) {
+				ok = YES;
+				break;
+			}
+		if (!ok) {
+			die([NSString stringWithFormat:
+			    @"Unable to decode architecture option %@", arch]);
+		}
+	}
 
 	if (o_reveal) {
 		NSMutableArray *fail = [NSMutableArray array];
@@ -1347,9 +1374,13 @@ main(int argc, char **argv)
 				CFErrorRef lerr = NULL;
 				CFURLRef def = LSCopyDefaultApplicationURLForURL(
 				    (CFURLRef)u, kLSRolesAll, &lerr);
-				if (def == NULL)
-					o_dieFailed(@"_LSOpenURLsWithCompletionHandler", @"",
-					    lerr ? (long)CFErrorGetCode(lerr) : -10814, @"");
+				if (def == NULL) {
+					NSString *desc = nil;
+					if (lerr != NULL &&
+					    ![[u scheme] isEqualToString:@"file"])
+						desc = [(NSError *)lerr description];
+					o_dieNoApp([u absoluteString], desc);
+				}
 				appURL = [(NSURL *)def autorelease];
 				key = [appURL path];
 			}

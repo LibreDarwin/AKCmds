@@ -12,9 +12,10 @@
  *     be passed bare.
  *
  *   - the parse string is scanned into find, replace and replacemethod
- *     rules.  A replacement of "same" substitutes the literal text same;
- *     where- clauses constrain matches, within- clauses run sub-rules
- *     over a named token, and error/warning attach a message.
+ *     rules.  A replacement of "same" leaves the matched text unchanged;
+ *     where- clauses restrict a match to the values captured by named
+ *     tokens, within- clauses run sub-rules over a named token, and
+ *     error/warning attach a message.
  *
  *   - patterns are matched at the token level: runs of characters, the
  *     parentheses that group argument lists and the angle-bracket names
@@ -113,8 +114,61 @@ static TPToken *makeToken(NSString *src, NSRange r, int type, int line)
 
 static BOOL isDelim(unichar c)
 {
-    return c == '(' || c == ')' || c == '{' || c == '}' ||
-        c == ',' || c == '<' || c == '>';
+    if (isalnum(c) || c == '_' || c == '$')
+        return NO;
+    return YES;
+}
+
+static BOOL skipRegionAt(NSString *src, NSUInteger i, NSUInteger *endPast)
+{
+    NSUInteger len = [src length];
+    unichar c = [src characterAtIndex:i];
+
+    if (c == '/' && i + 1 < len) {
+        unichar d = [src characterAtIndex:i + 1];
+        if (d == '/') {
+            NSUInteger j = i + 2;
+            while (j < len && [src characterAtIndex:j] != '\n')
+                j++;
+            *endPast = j;
+            return YES;
+        }
+        if (d == '*') {
+            NSUInteger j = i + 2;
+            while (j + 1 < len &&
+                   !([src characterAtIndex:j] == '*' &&
+                     [src characterAtIndex:j + 1] == '/'))
+                j++;
+            *endPast = (j + 1 < len) ? j + 2 : len;
+            return YES;
+        }
+        return NO;
+    }
+
+    if (c == '"' || c == '\'') {
+        unichar quote = c;
+        NSUInteger j = i + 1;
+        while (j < len) {
+            unichar d = [src characterAtIndex:j];
+            if (d == '\\') {
+                j += 2;
+                continue;
+            }
+            if (d == quote) {
+                j++;
+                break;
+            }
+            if (d == '\n')
+                break;
+            j++;
+        }
+        if (j > len)
+            j = len;
+        *endPast = j;
+        return YES;
+    }
+
+    return NO;
 }
 
 /* Split src into tokens.  <name> becomes one named token (no brackets). */
@@ -129,6 +183,18 @@ static NSArray *tokenizeString(NSString *src)
         unichar c = [src characterAtIndex:i];
         NSUInteger start = i;
         int type = TPTokenOther;
+        NSUInteger regionEnd = 0;
+
+        if (skipRegionAt(src, i, &regionEnd)) {
+            NSUInteger k;
+            for (k = i; k < regionEnd; k++)
+                if ([src characterAtIndex:k] == '\n')
+                    line++;
+            [out addObject:makeToken(src, NSMakeRange(i, regionEnd - i),
+                                    TPTokenOther, line)];
+            i = regionEnd;
+            continue;
+        }
 
         if (isspace(c)) {
             while (i < len && isspace([src characterAtIndex:i])) {
@@ -158,7 +224,7 @@ static NSArray *tokenizeString(NSString *src)
             [out addObject:t];
             i = end;
             continue;
-        } else {
+        } else if (!isDelim(c)) {
             while (i < len) {
                 c = [src characterAtIndex:i];
                 if (isspace(c) || isDelim(c))
@@ -166,6 +232,9 @@ static NSArray *tokenizeString(NSString *src)
                 i++;
             }
             type = TPTokenWord;
+        } else {
+            i++;
+            type = TPTokenOther;
         }
         [out addObject:makeToken(src, NSMakeRange(start, i - start), type, line)];
     }
@@ -292,8 +361,7 @@ enum {
 @property (retain) NSString *replacement;
 @property (retain) NSString *errorMsg;
 @property (retain) NSString *warningMsg;
-@property (retain) NSArray *whereSymbols;   /* where: array of "<x>" strings       */
-@property (retain) NSArray *whereMatches;   /* where: array of arrays of strings   */
+@property (retain) NSArray *whereClauses;
 @property (retain) NSArray *withinSymbols;  /* within: "<x>" (one per clause)      */
 @property (retain) NSArray *withinRules;    /* within: array of NSArray of TPRule  */
 @property (retain) NSArray *subRules;       /* replacemethod: array of TPRule      */
@@ -301,7 +369,7 @@ enum {
 
 @implementation TPRule
 @synthesize pattern, replacement, errorMsg, warningMsg;
-@synthesize whereSymbols, whereMatches, withinSymbols, withinRules, subRules;
+@synthesize whereClauses, withinSymbols, withinRules, subRules;
 @end
 
 /* ------------------------------------------------------------------ */
@@ -313,7 +381,7 @@ enum {
     NSString *src;
     NSUInteger pos;
     BOOL failed;
-    int lastError;              /* 1 = expected quote, 2 = rule specifier */
+    int lastError;
 }
 - (id) initWithString:(NSString *)s;
 - (NSArray *) parse;
@@ -388,12 +456,14 @@ enum {
         }
         if (c == '\n') {
             failed = YES;
+            lastError = 3;
             return nil;
         }
         [out appendString:[NSString stringWithFormat:@"%C", c]];
         i++;
     }
     failed = YES;
+    lastError = 3;
     return nil;
 }
 
@@ -422,23 +492,15 @@ enum {
         [self skipWS];
         if ([self keyword:@")"])
             break;
-        NSRange r = NSMakeRange(pos, 0);
-        NSUInteger len = [src length];
-        if (pos < len && [src characterAtIndex:pos] == '<') {
-            NSUInteger j = pos + 1;
-            while (j < len && [src characterAtIndex:j] != '>')
-                j++;
-            r = NSMakeRange(pos, (j < len ? j + 1 : j) - pos);
-            pos += r.length;
-            [syms addObject:[src substringWithRange:r]];
-        } else if (pos < len && [src characterAtIndex:pos] == '"') {
-            NSString *s = [self parseQuoted];
-            if (!s)
-                return nil;
-            [syms addObject:s];
-        } else {
+        if (pos >= [src length] || [src characterAtIndex:pos] != '"') {
+            failed = YES;
+            lastError = 1;
             return nil;
         }
+        NSString *s = [self parseQuoted];
+        if (!s)
+            return nil;
+        [syms addObject:s];
         [self skipWS];
         if ([self keyword:@","])
             continue;
@@ -447,7 +509,7 @@ enum {
 }
 
 /* (match...) tuple list inside { ... } */
-- (NSArray *) parseMatchList
+- (NSArray *) parseMatchList:(NSUInteger)arity
 {
     NSMutableArray *tuples = [NSMutableArray array];
     [self skipWS];
@@ -460,31 +522,27 @@ enum {
         if (![self keyword:@"("])
             return nil;
         NSMutableArray *tuple = [NSMutableArray array];
-        for (;;) {
+        NSUInteger k;
+        for (k = 0; k < arity; k++) {
             [self skipWS];
-            if ([self keyword:@")"])
-                break;
-            NSString *s;
-            if (pos < [src length] && [src characterAtIndex:pos] == '"')
-                s = [self parseQuoted];
-            else {
-                NSUInteger i = pos, len = [src length];
-                while (i < len && !isspace([src characterAtIndex:i]) &&
-                       [src characterAtIndex:i] != ',' &&
-                       [src characterAtIndex:i] != ')' && i < len &&
-                       [src characterAtIndex:i] != '(' &&
-                       [src characterAtIndex:i] != '{' &&
-                       [src characterAtIndex:i] != '}')
-                    i++;
-                s = [src substringWithRange:NSMakeRange(pos, i - pos)];
-                pos = i;
+            if (pos >= [src length] || [src characterAtIndex:pos] != '"') {
+                failed = YES;
+                lastError = 1;
+                return nil;
             }
+            NSString *s = [self parseQuoted];
             if (!s)
                 return nil;
             [tuple addObject:s];
             [self skipWS];
-            if ([self keyword:@","])
-                continue;
+            if (k + 1 < arity && [self keyword:@","]) {
+                [self skipWS];
+            }
+        }
+        if (![self keyword:@")"]) {
+            failed = YES;
+            lastError = 4;
+            return nil;
         }
         [tuples addObject:tuple];
         [self skipWS];
@@ -510,27 +568,25 @@ enum {
     if (!rule.pattern)
         return rule;
 
-    if (rtype == RRFind) {
-        /* optional where clauses follow. */
-        return rule;
-    }
-
-    [self skipWS];
-    if (![self keyword:@"with"]) {
-        failed = YES;
-        return rule;
-    }
-    [self skipWS];
-    if ([self keyword:@"same"]) {
-        rule->isSame = YES;
-        rule.replacement = @"same";
-    } else if (pos < [src length] && [src characterAtIndex:pos] == '"') {
-        rule.replacement = [self parseQuoted];
-        if (!rule.replacement)
+    if (rtype != RRFind) {
+        [self skipWS];
+        [self keyword:@"with"];
+        [self skipWS];
+        if ([self keyword:@"same"]) {
+            rule->isSame = YES;
+            rule.replacement = @"same";
+        } else if (pos < [src length] && [src characterAtIndex:pos] == '"') {
+            rule.replacement = [self parseQuoted];
+            if (!rule.replacement)
+                return rule;
+        } else if (pos < [src length]) {
+            failed = YES;
+            lastError = 1;
             return rule;
-    } else {
-        failed = YES;
-        return rule;
+        } else {
+            failed = YES;
+            return rule;
+        }
     }
 
     for (;;) {
@@ -545,11 +601,14 @@ enum {
             [self skipWS];
             if (![self keyword:@"isOneOf"])
                 return rule;
-            NSArray *mt = [self parseMatchList];
+            NSArray *mt = [self parseMatchList:[syms count]];
             if (!mt)
                 return rule;
-            rule.whereSymbols = syms;
-            rule.whereMatches = mt;
+            if (rule.whereClauses == nil)
+                rule.whereClauses = [NSMutableArray array];
+            [(NSMutableArray *)rule.whereClauses addObject:
+                [NSDictionary dictionaryWithObjectsAndKeys:
+                    syms, @"symbols", mt, @"matches", nil]];
         } else if ([self keyword:@"within"]) {
             [self skipWS];
             NSArray *syms = [self parseSymbolList];
@@ -786,7 +845,15 @@ static NSString *stripRuleSeparator(NSString *s)
 
     if (kind == 1)
         head = [NSString stringWithFormat:
-            @"Expected '\"',..., character position = %lu\n%s\n",
+            @"Expected '\"'..., character position = %lu\n%s\n\n",
+            (unsigned long)(atPos + 1), [rest UTF8String]];
+    else if (kind == 3)
+        head = [NSString stringWithFormat:
+            @"Unterminated quoted argument..., character position = %lu\n%s\n\n",
+            (unsigned long)(atPos + 1), [rest UTF8String]];
+    else if (kind == 4)
+        head = [NSString stringWithFormat:
+            @"Expected ')', character position = %lu\n%s\n\n",
             (unsigned long)(atPos + 1), [rest UTF8String]];
     else
         head = [NSString stringWithFormat:
@@ -861,6 +928,15 @@ static NSString *stripRuleSeparator(NSString *s)
 
     while (i < len) {
         unichar c = [text characterAtIndex:i];
+        NSUInteger regionEnd = 0;
+        if (skipRegionAt(text, i, &regionEnd)) {
+            NSUInteger k;
+            for (k = i; k < regionEnd; k++)
+                if ([text characterAtIndex:k] == '\n')
+                    line++;
+            i = regionEnd;
+            continue;
+        }
         if (c != '[') {
             if (c == '\n')
                 line++;
@@ -1022,6 +1098,9 @@ static NSString *stripRuleSeparator(NSString *s)
                                     withName:name reports:reports
                                        count:count changes:changes];
 
+    if (rule->isSame)
+        return text;
+
     NSArray *ptoks = tokenizeString(rule.pattern);
     NSUInteger pt = [ptoks count];
     NSArray *stoks = tokenizeString(text);
@@ -1032,18 +1111,36 @@ static NSString *stripRuleSeparator(NSString *s)
     if (pt == 0)
         return text;
 
+    NSUInteger pbeg = 0, pend = pt;
+    while (pbeg < pend &&
+           ((TPToken *)[ptoks objectAtIndex:pbeg])->type == TPTokenWS)
+        pbeg++;
+    while (pend > pbeg &&
+           ((TPToken *)[ptoks objectAtIndex:pend - 1])->type == TPTokenWS)
+        pend--;
+    if (pbeg >= pend)
+        return text;
+
     while (si < st) {
         /* Try to match the pattern beginning at token si. */
         BOOL matched = YES;
-        NSUInteger pi = 0;
+        NSUInteger pi = pbeg;
         NSUInteger sj = si;
         NSMutableDictionary *caps = [NSMutableDictionary dictionary];
         NSRange full = NSMakeRange(NSNotFound, 0);
         int line = 0;
 
-        while (pi < pt) {
+        while (pi < pend) {
             TPToken *p = [ptoks objectAtIndex:pi];
             if (p->type == TPTokenWS) {
+                if (sj >= st ||
+                    ((TPToken *)[stoks objectAtIndex:sj])->type != TPTokenWS) {
+                    matched = NO;
+                    break;
+                }
+                while (sj < st &&
+                       ((TPToken *)[stoks objectAtIndex:sj])->type == TPTokenWS)
+                    sj++;
                 pi++;
                 continue;
             }
@@ -1075,31 +1172,47 @@ static NSString *stripRuleSeparator(NSString *s)
             continue;
         }
 
-        /* where: every captures list must have a matching tuple. */
         BOOL whereOK = YES;
-        if (rule.whereSymbols != nil) {
-            NSArray *tuples = rule.whereMatches;
-            whereOK = NO;
-            NSUInteger t, tn = [tuples count];
-            NSUInteger syms = [rule.whereSymbols count];
-            for (t = 0; t < tn; t++) {
-                NSArray *tuple = [tuples objectAtIndex:t];
-                if ([tuple count] != syms)
-                    continue;
-                BOOL tupleOK = YES;
+        if (rule.whereClauses != nil) {
+            NSUInteger c, cn = [rule.whereClauses count];
+            for (c = 0; c < cn && whereOK; c++) {
+                NSDictionary *clause = [rule.whereClauses objectAtIndex:c];
+                NSArray *syms = [clause objectForKey:@"symbols"];
+                NSArray *tuples = [clause objectForKey:@"matches"];
+                NSUInteger symCount = [syms count];
+                BOOL allCaptured = YES;
+                NSMutableArray *captured = [NSMutableArray arrayWithCapacity:symCount];
                 NSUInteger k;
-                for (k = 0; k < syms; k++) {
+                for (k = 0; k < symCount; k++) {
                     NSString *cap = [caps objectForKey:
-                        [[rule.whereSymbols objectAtIndex:k]
+                        [[syms objectAtIndex:k]
                             stringByTrimmingCharactersInSet:
                                 [NSCharacterSet characterSetWithCharactersInString:@"<>"]]];
-                    NSString *exp = [tuple objectAtIndex:k];
-                    if (![cap isEqualToString:exp]) {
-                        tupleOK = NO;
+                    if (cap == nil) {
+                        allCaptured = NO;
+                        break;
+                    }
+                    [captured addObject:cap];
+                }
+                if (!allCaptured)
+                    continue;
+                whereOK = NO;
+                NSUInteger t, tn = [tuples count];
+                for (t = 0; t < tn; t++) {
+                    NSArray *tuple = [tuples objectAtIndex:t];
+                    BOOL tupleOK = YES;
+                    for (k = 0; k < symCount; k++) {
+                        if (![[captured objectAtIndex:k] isEqualToString:
+                                [tuple objectAtIndex:k]]) {
+                            tupleOK = NO;
+                            break;
+                        }
+                    }
+                    if (tupleOK) {
+                        whereOK = YES;
                         break;
                     }
                 }
-                if (tupleOK) { whereOK = YES; break; }
             }
         }
         if (!whereOK) {
@@ -1305,7 +1418,7 @@ static NSString *stripRuleSeparator(NSString *s)
     rmIsTTY = isatty(fileno(stdout)) ? YES : NO;
 
     if (rules == nil || [rules count] == 0) {
-        if (parser->failed)
+        if (parser->failed && parser->lastError != 0)
             [self reportParseError:parser->pos in:parseString
                               kind:parser->lastError];
         else {

@@ -3,7 +3,8 @@
 # Compares stdout+stderr combined, exit status, and the state of every input
 # file, for every case. Self-contained: no state outside its temp directory.
 #
-#   ./tests/parity.sh            # default: 64 non-TTY cases
+#   ./tests/parity.sh            # default: 108 non-TTY cases
+#   ./tests/parity.sh --script   # script cases only
 #   ./tests/parity.sh --tty      # 17 TTY cases under `script`
 #   ./tests/parity.sh --all      # both
 #
@@ -99,6 +100,48 @@ run_file_case() {
                     perl -ne 'print "      $_"'
             fi
         done
+    fi
+}
+
+# run_script_case <label> <fixture> <script> <args...>
+# Writes a custom fixture and a scriptfile for each side, runs the tool against
+# the file, and diffs stdout+stderr, exit status, and the rewritten file. The
+# find/replace/where/within/same surface is only reachable via -scriptfile, so
+# these cases live here rather than in run_file_case.
+run_script_case() {
+    local lab="$1" fixture="$2" script="$3"
+    shift 3
+    local o="$ROOT/so" m="$ROOT/sm"
+    rm -rf "$o" "$m"
+    mkdir -p "$o" "$m"
+    printf '%b' "$fixture" > "$o/f.m"
+    cp "$o/f.m" "$m/f.m"
+    printf '%s\n' "$script" > "$o/s.script"
+    cp "$o/s.script" "$m/s.script"
+
+    ( cd "$o" && "$ORACLE" -scriptfile s.script "$@" f.m > .stdout 2>&1 </dev/null )
+    local orc=$?
+    ( cd "$m" && "$MY" -scriptfile s.script "$@" f.m > .stdout 2>&1 </dev/null )
+    local mrc=$?
+
+    local bad=0
+    cmp -s "$o/.stdout" "$m/.stdout" || bad=1
+    [ "$orc" = "$mrc" ] || bad=1
+    cmp -s "$o/f.m" "$m/f.m" || bad=1
+
+    if [ "$bad" = 0 ]; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        FAILED="$FAILED script/$lab"
+        echo "FAIL script/$lab  (rc $orc vs $mrc)"
+        diff <(od -c -v "$o/.stdout") <(od -c -v "$m/.stdout") |
+            perl -ne 'print "    stdout: $_"'
+        if ! cmp -s "$o/f.m" "$m/f.m"; then
+            echo "    file differs:"
+            diff <(od -c -v "$o/f.m") <(od -c -v "$m/f.m") |
+                perl -ne 'print "      $_"'
+        fi
     fi
 }
 
@@ -242,6 +285,74 @@ run_non_tty() {
     run_file_case "3 dont" 3 -dont $r
 }
 
+# A fixture that puts the search text inside line comments, a block comment, a
+# string literal, and a char literal, plus real code hits on either side. Only
+# the code hits may match.
+CS='// foo here\nint a = foo; /* foo and foo */\nchar *s = "foo";\nchar c = '"'"'f'"'"';\nint b = foo; // foo\n'
+
+run_script() {
+    echo "== script: comment/string/literal regions are opaque =="
+    run_script_case "find skips comments+literals" "$CS" 'find "foo"' -verbose
+    run_script_case "replace skips comments+literals" "$CS" 'replace "foo" with "bar"' -verbose
+
+    echo "== script: replacemethod skips comments+strings =="
+    local MS='// [obj pq:1]\n[obj pq:1]\nchar *s = "[obj pq:1]";\n/* [obj pq:1] */\n[obj pq:1]\n'
+    run_script_case "rm skips comment" "$MS" 'replacemethod "pq:" with "rpq:"' -verbose
+    run_script_case "rm skips string" "$MS" 'replacemethod "pq:" with "rpq:"' -verbose
+
+    echo "== script: word boundaries and multi-word patterns =="
+    run_script_case "match before semicolon" 'int a = foo;\n' 'find "foo"' -verbose
+    run_script_case "replace before semicolon" 'int a = foo;\n' 'replace "foo" with "bar"' -verbose
+    run_script_case "word boundary foobar" 'int foobar = 1; int xfoo = 2;\n' 'find "foo"' -verbose
+    run_script_case "match inside brackets" '[obj foo:1]\n' 'find "foo"' -verbose
+    run_script_case "multiword exact" 'int a = foo;\n' 'find "int a"' -verbose
+    run_script_case "multiword collapses ws" 'int  a = foo;\n' 'find "int a"' -verbose
+    run_script_case "multiword needs ws" 'inta = foo;\n' 'find "int a"' -verbose
+    run_script_case "multiword across newline" 'a\nb\n' 'find "a b"' -verbose
+    run_script_case "multiword punct" 'int; a;\n' 'find "int; a"' -verbose
+    run_script_case "multiword replace" 'int a = 1; int a = 2;\n' 'replace "int a" with "X"' -verbose
+
+    echo "== script: unterminated block comment runs to EOF =="
+    run_script_case "unterminated block" 'int a = foo;\n/* foo\nint b = foo;\n' 'find "foo"' -verbose
+
+    echo "== script: replace with same is a no-op =="
+    run_script_case "replace same" 'int foo = 1;\n' 'replace "foo" with same' -verbose
+    run_script_case "replace same quiet" 'int foo = 1;\n' 'replace "foo" with same'
+
+    echo "== script: parse errors =="
+    run_script_case "unterminated quote" 'foo\n' 'replace "foo with "baz"' -verbose
+    run_script_case "unterminated pattern" 'foo\n' 'replace "foo' -verbose
+    run_script_case "unterminated find" 'foo\n' 'find "foo' -verbose
+    run_script_case "unterminated replacement" 'foo\n' 'replace "foo" with "baz' -verbose
+    run_script_case "expected quote after pattern" 'foo\n' 'replace "foo" x' -verbose
+    run_script_case "expected quote after with" 'foo\n' 'replace "foo" with baz' -verbose
+    run_script_case "trailing junk after replace" 'foo\n' 'replace "foo" with "baz" x' -verbose
+    run_script_case "bare where symbol" 'int foo = 1;\n' 'replace "foo" with "baz" where (foo) isOneOf {("1")}' -verbose
+    run_script_case "bare within symbol" 'int foo = 1;\n' 'replace "foo" with "baz" within (bar) {replace "1" with "2"}' -verbose
+    run_script_case "bare where match" 'int foo = 1;\n' 'replace "foo" with "baz" where ("foo") isOneOf {(1)}' -verbose
+    run_script_case "comma joined rules" 'int foo = 1;\n' 'replace "foo" with "baz", find "bar"' -verbose
+
+    echo "== script: replace argument grammar =="
+    run_script_case "with keyword" 'int foo = 1;\n' 'replace "foo" with "bar"' -verbose
+    run_script_case "implicit with" 'int foo = 1;\n' 'replace "foo" "bar"' -verbose
+    run_script_case "same explicit" 'int foo = 1;\n' 'replace "foo" with same' -verbose
+    run_script_case "same implicit" 'int foo = 1;\n' 'replace "foo" same' -verbose
+    run_script_case "pattern only eof" 'int foo = 1;\n' 'replace "foo"' -verbose
+    run_script_case "replacemethod quoted" '[obj pq:1]\n' 'replacemethod "pq:" with "rpq:"' -verbose
+
+    echo "== script: where clause semantics =="
+    run_script_case "where full token filter" 'foo=1; foo=2;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {("1")}' -verbose
+    run_script_case "where alternatives" 'foo=1; foo=2; foo=3;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {("1") ("3")}' -verbose
+    run_script_case "where two tokens" 'a=1 b=2; a=1 b=3; a=2 b=2;\n' 'replace "a=<e x> b=<e y>" with "X" where ("<e x>" "<e y>") isOneOf {("1" "2") ("2" "2")}' -verbose
+    run_script_case "where clauses are anded" 'a=1 b=2; a=1 b=3; a=2 b=2;\n' 'replace "a=<e x> b=<e y>" with "X" where ("<e x>") isOneOf {("1")} where ("<e y>") isOneOf {("2")}' -verbose
+    run_script_case "where missing token ignored" 'a=1 b=2; a=2 b=3;\n' 'replace "a=<e x> b=<e y>" with "X" where ("<e z>") isOneOf {("1")}' -verbose
+    run_script_case "where mixed capture ignored" 'a=1 b=2; a=2 b=2;\n' 'replace "a=<e x>" with "X" where ("<e x>" "<e z>") isOneOf {("1" "9") ("2" "9")}' -verbose
+    run_script_case "where find" 'foo=1; foo=2;\n' 'find "foo=<e x>" where ("<e x>") isOneOf {("2")}' -verbose
+    run_script_case "where tuple arity short" 'foo=1;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {("1" "2")}' -verbose
+    run_script_case "where tuple arity long" 'a=1 b=2;\n' 'replace "a=<e x> b=<e y>" with "X" where ("<e x>" "<e y>") isOneOf {("1")}' -verbose
+    run_script_case "where empty tuple" 'foo=1;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {()}' -verbose
+}
+
 run_tty() {
     local r2='replacemethod pq: with rFirst:, replacemethod rs: with rSecond:'
     local r3='replacemethod pq: with rFirst:, replacemethod rs: with rSecond:, replacemethod tu: with rThird:'
@@ -270,8 +381,9 @@ run_tty() {
 
 case "${1:---non-tty}" in
     --tty) run_tty ;;
-    --all) run_non_tty; run_tty ;;
-    *) run_non_tty ;;
+    --all) run_non_tty; run_script; run_tty ;;
+    --script) run_script ;;
+    *) run_non_tty; run_script ;;
 esac
 
 echo

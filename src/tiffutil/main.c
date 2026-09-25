@@ -128,6 +128,18 @@ load_image(tiff_t *t, int d, tuimg_t *im, int *err)
 	im->spp = spp;
 	im->photometric = photo;
 	im->rows_per_strip = rps;
+	/* Samples reach the writer in host order; a big-endian source has to
+	 * be converted, or the writer's swap back to big-endian double-swaps
+	 * it. Little-endian sources need nothing. */
+	if (bps == 16 && t->be) {
+		size_t i;
+		for (i = 0; i + 1 < rawlen; i += 2) {
+			unsigned char u = raw[i];
+			raw[i] = raw[i + 1];
+			raw[i + 1] = u;
+		}
+	}
+
 	im->px = raw;
 	im->pxlen = rawlen;
 	return 0;
@@ -315,16 +327,38 @@ main(int argc, char **argv)
 		{
 			tuimg_t im;
 			int err = 0;
+			uint32_t src_comp = COMP_NONE;
+			unsigned char *strip = NULL;
+			size_t striplen = 0;
+			int pred = 0;
+
 			if (load_image(&t, have_extract, &im, &err) < 0) {
 				tiff_close(&t);
 				return err;
 			}
-			if (tiff_write_image(outpath, &im, im.px, im.pxlen,
-			    COMP_NONE, 1) < 0) {
+			/* -extract keeps whatever the source directory used,
+			 * rather than rewriting uncompressed. */
+			tu_get_uint(&t, have_extract, TAG_COMPRESSION, &src_comp);
+			if (src_comp != COMP_NONE && src_comp != COMP_LZW &&
+			    src_comp != COMP_PACKBITS)
+				src_comp = COMP_NONE;
+			/* The pixels are in host order here, so they still have to
+			 * go through the strip builder; that is what puts 16-bit
+			 * samples back into big-endian. */
+			if (encode_one(&im, src_comp, &strip, &striplen,
+			    &pred) < 0) {
 				free(im.px);
 				tiff_close(&t);
 				return 1;
 			}
+			if (tiff_write_image(outpath, &im, strip, striplen,
+			    src_comp, 1) < 0) {
+				free(strip);
+				free(im.px);
+				tiff_close(&t);
+				return 1;
+			}
+			free(strip);
 			free(im.px);
 			printf("1 image written to %s.\n", outpath);
 		}

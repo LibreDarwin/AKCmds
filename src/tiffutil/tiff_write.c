@@ -138,6 +138,11 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	f[nf++] = (wfield_t){TAG_YRESOLUTION, 5, 1, 0, yr, 8};
 	f[nf++] = (wfield_t){TAG_PLANARCONFIG, 3, 1, 1, NULL, 0};
 	f[nf++] = (wfield_t){TAG_RESOLUTIONUNIT, 3, 1, 2, NULL, 0};
+	/* 317 sorts before 338, so the predictor is queued ahead of the
+	 * extra samples. It is emitted for every predicted file, not only
+	 * the ones that also carry extra samples. */
+	if (predictor == 2)
+		f[nf++] = (wfield_t){TAG_PREDICTOR, 3, 1, 2, NULL, 0};
 	if (ncolor && im->spp > ncolor) {
 		/* More samples than the photometric implies, so the surplus are
 		 * extra channels.  The reference tool derives them itself when the
@@ -147,8 +152,6 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 		f[nf++] = (wfield_t){TAG_EXTRASAMPLES, 3, im->spp - ncolor, 0,
 		    xs_ext, (size_t)(im->spp - ncolor) * 2};
 	}
-	if (predictor == 2)                    /* 317 sorts before 339 */
-		f[nf++] = (wfield_t){TAG_PREDICTOR, 3, 1, 2, NULL, 0};
 	f[nf++] = (wfield_t){TAG_SAMPLEFORMAT, 3, im->spp, 0,
 	    fmt_ext, (size_t)im->spp * 2};
 	f[nf++] = (wfield_t){TAG_ICCPROFILE, 7, (uint32_t)icclen, 0, icc, icclen};

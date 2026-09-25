@@ -82,9 +82,26 @@ $(OBJDIR)/tops.o: src/tops/tops.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/tops/tops.m
 
-test: all
+# Byte-parity check against Apple's /usr/bin/tops, run by tests/parity.sh.
+# MY is passed as a relative path and resolved against the project root by the
+# script, because this Makefile must stay free of $(shell)/$(CURDIR) to work
+# under both GNU make and bmake.
+#
+#   make parity   # verify the binary for the current CONFIG
+#   make test     # alias for parity
+#
+# The script is not listed as a prerequisite: make would otherwise treat it as
+# a source file and try to build it. It is tracked in tests/, not local/,
+# because .gitignore drops all of local/ and the build must not depend on
+# anything that a fresh clone cannot see.
+# It is run with bash explicitly: the script uses process substitution, which
+# macOS /bin/sh (bash in POSIX mode) rejects.
+parity: all
+	MY="build/$(CONFIG)/tops" bash tests/parity.sh --all
+
+test: parity
 
 clean:
 	rm -rf build
 
-.PHONY: all test clean
+.PHONY: all parity test clean

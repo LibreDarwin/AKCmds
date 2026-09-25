@@ -6,6 +6,21 @@
 	objectVersion = 56;
 	objects = {
 
+/* Begin PBXAggregateTarget section */
+		A70000010000000000000016 /* tops-parity */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = A80000010000000000000022 /* Build configuration list for PBXAggregateTarget "tops-parity" */;
+			buildPhases = (
+				A50000010000000000000016 /* tops parity */,
+			);
+			dependencies = (
+				A7B000010000000000000002 /* PBXTargetDependency */,
+			);
+			name = "tops-parity";
+			productName = "tops-parity";
+		};
+/* End PBXAggregateTarget section */
+
 /* Begin PBXBuildFile section */
 		A10000010000000000000001 /* pbcopy.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000001 /* pbcopy.m */; };
 		A10000010000000000000002 /* pbcopy.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000001 /* pbcopy.m */; };
@@ -20,6 +35,16 @@
 		A10000010000000000000011 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000008 /* ImageIO.framework */; };
 		A10000010000000000000015 /* tops.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000015 /* tops.m */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A7B000010000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A70000010000000000000015;
+			remoteInfo = tops;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A20000010000000000000001 /* pbcopy */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = pbcopy; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -288,9 +313,32 @@ targets = (
 				A70000010000000000000003 /* open */,
 				A70000010000000000000010 /* tiff2icns */,
 				A70000010000000000000015 /* tops */,
+				A70000010000000000000016 /* tops-parity */,
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A50000010000000000000016 /* tops parity */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "tops parity";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\nORACLE=\"${ORACLE:-/usr/bin/tops}\"\nif [ ! -x \"$BUILT_PRODUCTS_DIR/tops\" ]; then\n  echo \"error: tops was not built at $BUILT_PRODUCTS_DIR/tops\"\n  exit 1\nfi\nif [ ! -x \"$ORACLE\" ]; then\n  echo \"warning: oracle $ORACLE is absent, skipping byte-parity verification\"\n  exit 0\nfi\nMY=\"$BUILT_PRODUCTS_DIR/tops\" ORACLE=\"$ORACLE\" bash \"$SRCROOT/tests/parity.sh\" --all\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A50000010000000000000003 /* Sources */ = {
@@ -334,6 +382,14 @@ targets = (
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A7B000010000000000000002 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A70000010000000000000015 /* tops */;
+			targetProxy = A7B000010000000000000001 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A80000010000000000000004 /* Debug */ = {
@@ -448,6 +504,20 @@ targets = (
 			};
 			name = Release;
 		};
+		A80000010000000000000020 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A80000010000000000000021 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -506,6 +576,15 @@ targets = (
 			buildConfigurations = (
 				A80000010000000000000010 /* Debug */,
 				A80000010000000000000011 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000010000000000000022 /* Build configuration list for PBXAggregateTarget "tops-parity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000010000000000000020 /* Debug */,
+				A80000010000000000000021 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

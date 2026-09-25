@@ -7,17 +7,18 @@
  *   - usage: tiff2icns [-noLarge] infile [outfile]; the source is opened
  *     lazily by path (NSImage initByReferencingFile:) and must exist;
  *   - the source's bitmap representations are scanned for exact matches
- *     at 48, 32, 16, 128, 256, 512 and 1024 pixels; among equal-size
+ *     at 48, 32, 16, 128, 256 and 512 pixels; among equal-size
  *     matches the representation with the most bits per sample wins;
- *   - by default, when no 32x32 representation exists, a 64x64
- *     representation is synthesized from a copy of the image, so the
- *     result always contains a small icon; -noLarge disables that;
+ *   - a 1024x1024 representation counts as a match for the "nothing
+ *     suitable" test but is never written to the icon family;
+ *   - -noLarge only suppresses the "no appropriate images found"
+ *     warning; it does not change which representations are written;
  *   - the chosen representations are packed into an icon family with
  *     CGImageDestinationCreateWithData + kUTTypeAppleICNS and written
  *     back with writeToFile:atomically:YES; when no representation
  *     matched, an empty .icns file is still written;
  *   - without an outfile argument the output path is the source path with
- *     the extension replaced by "icns".
+ *     the last extension replaced by "icns".
  *
  * Copyright (C) 2026, LibreDarwin
  * SPDX-License-Identifier: BSD-3-Clause
@@ -78,14 +79,16 @@ static NSBitmapImageRep *repForSize(NSImage *image, NSInteger size)
 }
 
 static int convert(const char *prog, const char *src, const char *out,
-    int addSmallIcon)
+    int noLarge)
 {
+    static const NSInteger kSizes[] = { 48, 32, 16, 128, 256, 512 };
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *srcPath, *outPath;
     NSImage *image;
-    NSBitmapImageRep *rep, *rep32;
+    NSBitmapImageRep *rep;
     NSMutableArray *icons;
     NSData *data;
+    BOOL found;
     int rc = 0;
 
     srcPath = [fm stringWithFileSystemRepresentation:src length:strlen(src)];
@@ -107,39 +110,16 @@ static int convert(const char *prog, const char *src, const char *out,
     }
 
     icons = [[NSMutableArray alloc] init];
-    rep = repForSize(image, 48);
-    if (rep != nil)
+    found = NO;
+    for (NSUInteger i = 0; i < sizeof(kSizes) / sizeof(kSizes[0]); i++) {
+        rep = repForSize(image, kSizes[i]);
+        if (rep == nil)
+            continue;
+        found = YES;
         [icons addObject:rep];
-    rep32 = repForSize(image, 32);
-    if (rep32 != nil)
-        [icons addObject:rep32];
-    rep = repForSize(image, 16);
-    if (rep != nil)
-        [icons addObject:rep];
-    rep = repForSize(image, 128);
-    if (rep != nil)
-        [icons addObject:rep];
-    rep = repForSize(image, 256);
-    if (rep != nil)
-        [icons addObject:rep];
-    rep = repForSize(image, 512);
-    if (rep != nil)
-        [icons addObject:rep];
-    rep = repForSize(image, 1024);
-    if (rep != nil)
-        [icons addObject:rep];
-
-    if (addSmallIcon && rep32 == nil) {
-        NSImage *scaled = [image copy];
-        [scaled setSize:NSMakeSize(64.0, 64.0)];
-        [scaled lockFocus];
-        rep = [[NSBitmapImageRep alloc]
-            initWithFocusedViewRect:NSMakeRect(0.0, 0.0, 64.0, 64.0)];
-        [scaled unlockFocus];
-        [scaled release];
-        [icons addObject:rep];
-        [rep release];
     }
+    if (repForSize(image, 1024) != nil)
+        found = YES;
 
     if (out != nil) {
         outPath = [fm stringWithFileSystemRepresentation:out length:strlen(out)];
@@ -161,9 +141,11 @@ static int convert(const char *prog, const char *src, const char *out,
         data = mdata;
     } else {
         data = [[NSData alloc] init];
-        fprintf(stderr,
-            "%s: no appropriate images found. writing empty file '%s'\n",
-            prog, [outPath fileSystemRepresentation]);
+        if (noLarge && !found) {
+            fprintf(stderr,
+                "%s: no appropriate images found. writing empty file '%s'\n",
+                prog, [outPath fileSystemRepresentation]);
+        }
     }
 
     if ([data writeToFile:outPath atomically:YES]) {
@@ -186,20 +168,25 @@ int main(int argc, char **argv)
 {
     NSAutoreleasePool *pool;
     const char *src, *out;
-    int addSmallIcon, rc;
+    int noLarge, rc;
 
     pool = [[NSAutoreleasePool alloc] init];
 
     if (argc < 2)
         usage(argv[0]);
 
-    addSmallIcon = (strcmp(argv[1], "-noLarge") != 0);
-    src = (addSmallIcon ? argv[1] : argv[2]);
+    noLarge = (strcmp(argv[1], "-noLarge") == 0);
+    if (noLarge) {
+        src = argv[2];
+        out = argv[3];
+    } else {
+        src = argv[1];
+        out = argv[2];
+    }
     if (src == NULL)
         usage(argv[0]);
-    out = (addSmallIcon ? argv[2] : argv[3]);
 
-    rc = convert(argv[0], src, out, addSmallIcon);
+    rc = convert(argv[0], src, out, noLarge);
 
     [pool release];
     exit(rc);

@@ -112,9 +112,15 @@ tiff2icns-parity: all
 open-parity: all
 	MY="build/$(CONFIG)/open" bash tests/open-parity.sh
 
-test: parity tiff2icns-parity open-parity
+# pbcopy/pbpaste.  -pboard has no private-pasteboard mode, so the harness is
+# restricted to ruler/find/font and refuses any invocation that would reach
+# general; see the comment at the top of the script before changing that.
+pbcopy-parity: all
+	MY="build/$(CONFIG)/pbcopy" bash tests/pbcopy-parity.sh
+
+test: parity tiff2icns-parity open-parity pbcopy-parity
 
 clean:
 	rm -rf build
 
-.PHONY: all parity tiff2icns-parity open-parity test clean
+.PHONY: all parity tiff2icns-parity open-parity pbcopy-parity test clean

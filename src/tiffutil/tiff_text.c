@@ -65,6 +65,22 @@ dump_tag_name(uint16_t tag)
 
 /* Photometric is quoted for the two grayscale cases and left bare for the
  * colour ones, which is a quirk of the reference tool worth keeping. */
+static int
+photo_channels(uint32_t p)
+{
+	switch (p) {
+	case 0: return 1;		/* WhiteIsZero */
+	case 1: return 1;		/* BlackIsZero */
+	case 2: return 3;		/* RGB */
+	case 3: return 1;		/* RGBPalette */
+	case 4: return 1;		/* TransparencyMask */
+	case 5: return 4;		/* CMYK */
+	case 6: return 3;		/* YCbCr */
+	case 8: return 1;		/* CIELab */
+	default:  return 0;
+	}
+}
+
 static const char *
 photometric_phrase(uint32_t p)
 {
@@ -186,6 +202,22 @@ tu_cmd_info(const char *path, int verbose)
 	for (int d = 0; d < t.ndir; d++) {
 		uint32_t w = 0, h = 0, bps = 0, spp = 1, rps = 0, photo = 0;
 
+		{
+			uint32_t cspp = 0, ctype = 0;
+			int cxtype = 0;
+			uint32_t ccount = 0;
+			tu_get_uint(&t, d, TAG_SAMPLESPERPIXEL, &cspp);
+			tu_get_uint(&t, d, TAG_PHOTOMETRIC, &ctype);
+			if (tu_tag_raw(&t, d, TAG_EXTRASAMPLES, &cxtype,
+			    &ccount) == NULL)
+				ccount = 0;
+			if (photo_channels(ctype) + ccount != cspp)
+				printf("TIFFReadDirectory: Warning, Sum of"
+				    " Photometric type-related color channels"
+				    " and ExtraSamples doesn't match"
+				    " SamplesPerPixel. Defining non-color"
+				    " channels as ExtraSamples..\n");
+		}
 		printf("Directory at 0x%x\n", t.ifdoff[d]);
 		tu_get_uint(&t, d, TAG_IMAGEWIDTH, &w);
 		tu_get_uint(&t, d, TAG_IMAGELENGTH, &h);
@@ -211,10 +243,15 @@ tu_cmd_info(const char *path, int verbose)
 		if (tu_get_uint(&t, d, TAG_PHOTOMETRIC, &photo) == 0)
 			printf("  Photometric Interpretation: %s\n",
 			    photometric_phrase(photo));
+		if (tu_has_tag(&t, d, TAG_EXTRASAMPLES))
+			printf("  Alpha: Present\n");
 		if (tu_has_tag(&t, d, TAG_FILLORDER)) {
 			tu_get_uint(&t, d, TAG_FILLORDER, &v);
 			printf("  FillOrder: %s\n", v == 2 ? "lsb-to-msb" : "msb-to-lsb");
 		}
+		if (tu_get_uint(&t, d, TAG_PREDICTOR, &v) == 0 && v != 1)
+			printf("  Predictor: %s\n",
+			    v == 2 ? "horizontal differencing" : "floating point");
 		if (tu_has_tag(&t, d, TAG_ORIENTATION)) {
 			tu_get_uint(&t, d, TAG_ORIENTATION, &v);
 			printf("  Orientation: %s\n", orientation_phrase(v));
@@ -297,7 +334,23 @@ tu_cmd_dump(const char *path)
 				shown = sz == 1 ? raw[0] : sz == 2
 				    ? rd_be16(raw, t.be) : rd_be32(raw, t.be);
 			}
-			if (cnt == 1) {
+			if (type == TYPE_UNDEFINED) {
+				/* Undefined bytes are shown in hex. The reference
+				 * tool prints a zero as "00" but every other
+				 * value with an 0x prefix and no padding, so 2
+				 * comes out "0x2" and 12 comes out "0xc". This
+				 * path also shows 24 values where the decimal
+				 * path shows 20. */
+				for (k = 0; k < cnt && k < 24; k++) {
+					unsigned int x = val ? val[k] : 0;
+					if (x == 0)
+						printf(k ? " %02x" : "%02x", x);
+					else
+						printf(k ? " 0x%x" : "0x%x", x);
+				}
+				if (cnt > 20)
+					printf(" ...");
+			} else if (cnt == 1) {
 				printf("%u", shown);
 			} else {
 				for (k = 0; k < cnt && k < 20; k++) {

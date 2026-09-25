@@ -214,7 +214,7 @@ tu_compression_name(uint32_t c)
 	case 2:     return "CCITT 1D";
 	case 3:     return "Group 3 Fax";
 	case 4:     return "Group 4 Fax";
-	case 5:     return "LZW";
+	case 5:     return "Lempel-Ziv & Welch encoding";
 	case 6:     return "JPEG (old-style)";
 	case 7:     return "JPEG";
 	case 8:     return "Adobe Deflate";

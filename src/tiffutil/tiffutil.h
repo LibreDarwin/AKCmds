@@ -43,6 +43,8 @@ int tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len);
 extern int tu_chatter;
 void tu_set_chatter(int on);
 
+#define TYPE_UNDEFINED 7
+
 #define TUFF_ENOENT (-2)
 #define TUFF_EOPEN  (-1)
 

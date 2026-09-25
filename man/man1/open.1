@@ -1,0 +1,183 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/open.
+.TH OPEN 1 "September 25, 2026" "LibreDarwin"
+.SH NAME
+\fBopen\fR \- open files, directories, applications and URLs
+.SH SYNOPSIS
+.B open
+[\fB\-e\fR] [\fB\-t\fR] [\fB\-f\fR] [\fB\-W\fR] [\fB\-R\fR] [\fB\-n\fR]
+[\fB\-g\fR] [\fB\-h\fR] [\fB\-s\fR \fIpartial SDK name\fR]
+[\fB\-b\fR \fIbundle identifier\fR] [\fB\-a\fR \fIapplication\fR]
+[\fB\-u\fR \fIURL\fR] [\fIfilenames\fR]
+[\fB\-\-args\fR \fIarguments\fR]
+.SH DESCRIPTION
+.B open
+opens each named file with the application registered for its type, through
+LaunchServices, so an application that is already running is reused.  A
+directory is opened in a new Finder window.
+.PP
+An argument is treated as a URL only when it begins with a scheme, that is a
+letter followed by any number of letters, digits, plus signs, hyphens and
+dots, and then a colon.  Anything else is a file path, so a name such as
+.I a/b:c
+is looked for as a file rather than handed to LaunchServices.
+.PP
+A name that has a scheme and is also the name of an existing file is
+ambiguous, and rather than guess,
+.B open
+asks which was meant:
+.PP
+.RS
+.nf
+name?
+[0]  cancel
+[1]  Open the file name
+[2]  Open the URL  name
+
+Which did you mean?
+.fi
+.RE
+.PP
+Answering 1 opens the file, 2 opens the URL, and anything else, including end
+of input, cancels with a status of 1.
+
+.B \-f
+copies standard input to a temporary file and opens that with the default text
+editor.
+.SH OPTIONS
+.TP
+.BI \-a " application"
+Open with the named application.
+.TP
+.BI \-\-arch " arch"
+Open with the given CPU architecture type and subtype.  An architecture
+string that cannot be decoded is an error.
+.TP
+.BI \-b " bundle-identifier"
+Open with the application whose bundle identifier is given.
+.TP
+.B \-e
+Open with TextEdit.
+.TP
+.B \-t
+Open with the default text editor.
+.TP
+.B \-f
+Read standard input and open it with the default text editor.
+.TP
+.BR \-F ", " \-\-fresh
+Launch the application fresh, that is, without restoring windows.  Saved
+persistent state is lost, excluding untitled documents.
+.TP
+.BR \-R ", " \-\-reveal
+Select the named files in the Finder instead of opening them.
+.TP
+.BR \-W ", " \-\-wait-apps
+Block until the applications that were used are closed, even if they were
+already running.
+.TP
+.B \-\-args
+Treat every remaining argument as an argument for the opened application's
+.BR main (),
+instead of as a file to open.
+.TP
+.BR \-n ", " \-\-new
+Open a new instance of the application even if one is already running.
+.TP
+.BR \-j ", " \-\-hide
+Launch the application hidden.
+.TP
+.BR \-g ", " \-\-background
+Do not bring the application to the foreground.
+.TP
+.BR \-h ", " \-H ", " \-\-header
+Search header file locations for headers matching the given file names and
+open them.  More than one matching header prompts for a choice.  Combine with
+.B \-s
+to restrict which SDKs are searched.  A name that matches no header is
+reported as such.
+.TP
+.BI \-s " partial SDK name"
+For
+.BR \-h ,
+search only those SDKs whose names contain this value.  Otherwise the
+highest versioned SDK of each platform is used.
+.TP
+.BI \-u " URL" ", " \-\-url " URL"
+Open this URL, even if it matches an existing file path exactly.
+.TP
+.BI \-i " path" ", " \-\-stdin " path"
+Launch the application with its standard input connected to
+.IR path ,
+which defaults to /dev/null.
+.TP
+.BI \-o " path" ", " \-\-stdout " path"
+Launch the application with its standard output connected to
+.IR path .
+.TP
+.BI \-\-stderr " path"
+Launch the application with its standard error connected to
+.IR path .
+.TP
+.BI \-\-env " VAR"
+Add an environment variable to the launched process, where
+.I VAR
+is formatted
+.IR VAR = foo
+or just
+.I VAR
+for a null string value.  May be given more than once.
+.TP
+.B \-\-no-recents
+Do not add the opened items to the recent items list.
+.SH EXIT STATUS
+.B open
+exits 0 on success, and 1 after a usage error or a failure to launch, such
+as a named file that does not exist, an application that cannot be found, an
+architecture that cannot be decoded, or a URL that no application claims.
+The built-in help is printed, with the same status as a usage error, whenever
+.B open
+is given no file to open.
+.SH EXAMPLES
+Open a document in its default application:
+.PP
+.RS
+.nf
+open notes.txt
+.fi
+.RE
+.PP
+Open it in a specific application, by name or by bundle identifier:
+.PP
+.RS
+.nf
+open -a Preview scan.tiff
+open -b com.apple.Preview scan.tiff
+.fi
+.RE
+.PP
+Pass arguments to the opened application rather than opening files:
+.PP
+.RS
+.nf
+open -a Terminal --args -l
+.fi
+.RE
+.SH NOTES
+.B \-v
+is accepted and has no effect.
+.PP
+There is no
+.B \-help
+option, and
+.B \-x
+is not an option: both are reported as invalid, as is any other unrecognized
+spelling.  The help described above is the one printed when no file is named,
+not a separate option.
+.SH SEE ALSO
+.BR pbcopy (1),
+.BR pbpaste (1),
+.BR textutil (1),
+.BR tiffutil (1)

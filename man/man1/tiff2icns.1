@@ -1,0 +1,90 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/tiff2icns.
+.TH TIFF2ICNS 1 "September 25, 2026" "LibreDarwin"
+.SH NAME
+\fBtiff2icns\fR \- convert an image file into an icns icon family file
+.SH SYNOPSIS
+.B tiff2icns
+[\fB\-noLarge\fR] \fIinfile\fR [\fIoutfile\fR]
+.SH DESCRIPTION
+.B tiff2icns
+reads an image and writes an
+.B .icns
+icon family built from the square representations the source already carries.
+The family is written in the order an icon family is expected to hold them:
+48, 32, 16, 128, 256 and 512 pixels.
+.PP
+A representation is used only when it is exactly
+.I size
+by
+.I size
+pixels; a representation of some other shape, including one that merely spans
+.I size
+in one direction, is not used at all.  When several representations of the
+same size qualify, the one with the most bits per sample is used, whatever
+order the source stores them in.  Sizes the source does not provide are left
+out, so the result can be much smaller than a complete icon set.  Everything
+that is written is stored with 8 bits per sample, so a representation read
+from a deeper source is converted rather than rejected.
+.PP
+A 1024 by 1024 representation is never written, because an icon family does
+not hold one.  It is still recognized, and it is enough to satisfy
+.BR \-noLarge .
+No 32 by 32 representation is synthesized either: a source that has no
+square representation of a size the family uses produces no entry for it.
+.PP
+If
+.I outfile
+is omitted, the output path is the source path with its last extension
+replaced by
+.BR icns ,
+so
+.I icon.tiff
+becomes
+.IR icon.icns .
+The file is written atomically.
+.SH OPTIONS
+.TP
+.B \-noLarge
+Report a source that has no representation for any of the sizes above.  The
+option changes nothing about what is written: a 128, 256 or 512 pixel
+representation is written whether or not it is given.  It is recognized only
+as the first argument, so any later occurrence of the word is taken as the
+output file name instead.
+.SH EXIT STATUS
+.B tiff2icns
+exits 0 when the icon family was written, which includes the case of an empty
+family, and 1 when the source does not exist, cannot be read as an image, or
+the output cannot be written.
+.PP
+A source that loads but holds no representation of any expected size is not an
+error.  Without
+.B \-noLarge
+nothing is said and an empty file is written; with it, a warning naming the
+output file is printed first.  Either way the exit status is 0.
+.PP
+A file that exists but is not an image, including an empty file and a
+directory, is reported as a source that cannot be loaded.
+.SH EXAMPLES
+Convert an image, letting the output name be derived from the input:
+.PP
+.RS
+.nf
+tiff2icns icon.tiff
+.fi
+.RE
+.PP
+Convert to a chosen name, and be told when the source holds nothing that the
+icon family can use:
+.PP
+.RS
+.nf
+tiff2icns -noLarge icon.tiff Icon.icns
+.fi
+.RE
+.SH SEE ALSO
+.BR iconutil (1),
+.BR sips (1),
+.BR tiffutil (1)

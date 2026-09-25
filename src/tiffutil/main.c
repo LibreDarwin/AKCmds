@@ -354,7 +354,7 @@ main(int argc, char **argv)
 				return 1;
 			}
 			if (tiff_write_image(outpath, &im, strip, striplen,
-			    src_comp, 1) < 0) {
+			    src_comp, pred) < 0) {
 				free(strip);
 				free(im.px);
 				tiff_close(&t);

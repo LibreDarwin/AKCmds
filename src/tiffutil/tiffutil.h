@@ -39,6 +39,7 @@ typedef struct {
 uint16_t rd_be16(const unsigned char *p, int be);
 uint32_t rd_be32(const unsigned char *p, int be);
 
+int tiff_cat(const char *const *paths, int npaths, const char *outpath);
 int tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len);
 extern int tu_chatter;
 void tu_set_chatter(int on);

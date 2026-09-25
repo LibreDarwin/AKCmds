@@ -211,6 +211,67 @@ static void updateStatusBar(unsigned long processed, unsigned long total)
     }
 }
 
+/* The replacemethod bar is a fixed two-row widget: the top row is the
+ * usual percentage scale and the lower row is 77 cells wide.  With n rules
+ * the report for rule k (zero based) is printed at cell floor(77*k/n), the
+ * payload at 77-ceil(20/n), and the closing run is ceil(20/n) cells.  The
+ * first rule's report therefore lands before the bar opens. */
+#define RM_BAR_CELLS 77
+#define RM_TAIL_CELLS 20
+
+static int rmRuleCount = 1;
+static int rmBarCell;
+static BOOL rmIsTTY;
+
+static int rmCellForRule(int k)
+{
+    return (RM_BAR_CELLS * k) / rmRuleCount;
+}
+
+static int rmTailCells(void)
+{
+    return (RM_TAIL_CELLS + rmRuleCount - 1) / rmRuleCount;
+}
+
+/* The top row is the plain percentage scale. */
+static void rmDrawTopRow(void)
+{
+    printf("[0%%................25%%................50%%................75%%..............100%%]\n");
+    fflush(stdout);
+}
+
+/* The lower row starts here; on a terminal the first rule's report is
+ * printed between the two rows, so the bracket is opened separately. */
+static void rmOpenLowerRow(void)
+{
+    putchar('[');
+    rmBarCell = 0;
+    fflush(stdout);
+}
+
+static void openReplaceMethodBar(void)
+{
+    rmDrawTopRow();
+    rmOpenLowerRow();
+}
+
+/* Extend the lower row with dots up to the given cell. */
+static void fillReplaceMethodBar(int cell)
+{
+    while (rmBarCell < cell) {
+        putchar('.');
+        rmBarCell++;
+    }
+    fflush(stdout);
+}
+
+static void closeReplaceMethodBar(void)
+{
+    fillReplaceMethodBar(RM_BAR_CELLS);
+    printf("]\n");
+    fflush(stdout);
+}
+
 /* ------------------------------------------------------------------ */
 /* A single parsed rule.                                               */
 /* ------------------------------------------------------------------ */
@@ -575,6 +636,7 @@ enum {
 @public
     NSMutableString *parseString;
     NSString *scriptFile;
+    NSString *classFile;
     NSMutableArray *fileNames;
     BOOL dontWriteFiles;
     int verbose;
@@ -583,12 +645,13 @@ enum {
 }
 @property (retain) NSMutableString *parseString;
 @property (retain) NSString *scriptFile;
+@property (retain) NSString *classFile;
 @property (retain) NSMutableArray *fileNames;
 @end
 
 @implementation Tops
 
-@synthesize parseString, scriptFile, fileNames;
+@synthesize parseString, scriptFile, classFile, fileNames;
 
 - (id) init
 {
@@ -608,6 +671,7 @@ enum {
 {
     [parseString release];
     [scriptFile release];
+    [classFile release];
     [fileNames release];
     [super dealloc];
 }
@@ -615,6 +679,16 @@ enum {
 /* ------------------------------------------------------------------ */
 /* Command-line reconstruction of the rules.                           */
 /* ------------------------------------------------------------------ */
+
+/* Rules may be chained in a single command line; the comma that separates
+ * them is not part of the token it follows.  A bare word such as "same,"
+ * carries no colon, so its comma belongs to the word. */
+static NSString *stripRuleSeparator(NSString *s)
+{
+    if ([s hasSuffix:@","] && [s rangeOfString:@":"].location != NSNotFound)
+        return [s substringToIndex:[s length] - 1];
+    return s;
+}
 
 - (void) buildFromArgv
 {
@@ -645,7 +719,7 @@ enum {
         } else if ([arg isEqualToString:@"-classfile"] ||
                    [arg isEqualToString:@"classfile"]) {
             if (i + 1 < count)
-                ++i;
+                self.classFile = [args objectAtIndex:++i];
         } else if ([arg isEqualToString:@"find"] ||
                    [arg isEqualToString:@"-find"] ||
                    [arg isEqualToString:@"replace"] ||
@@ -653,10 +727,12 @@ enum {
                    [arg isEqualToString:@"replacemethod"] ||
                    [arg isEqualToString:@"-replacemethod"]) {
             if (i + 1 < count)
-                [parseString appendFormat:@"%@ \"%@\"", arg, [args objectAtIndex:++i]];
+                [parseString appendFormat:@"%@ \"%@\"", arg,
+                    stripRuleSeparator([args objectAtIndex:++i])];
         } else if ([arg isEqualToString:@"with"] || [arg isEqualToString:@"-with"]) {
             if (i + 1 < count)
-                [parseString appendFormat:@"with \"%@\"", [args objectAtIndex:++i]];
+                [parseString appendFormat:@"with \"%@\"",
+                    stripRuleSeparator([args objectAtIndex:++i])];
         } else if ([arg isEqualToString:@"same"]) {
             [parseString appendString:@"same"];
         } else if ([arg isEqualToString:@"where"]) {
@@ -738,17 +814,43 @@ enum {
                                   count:(int *)count
                                  changes:(int *)changes
 {
+    /* A pattern with no colon in it constrains nothing the oracle can match. */
+    if ([rule.pattern rangeOfString:@":"].location == NSNotFound)
+        return text;
+
     NSArray *pColon = [rule.pattern componentsSeparatedByString:@":"];
     NSMutableArray *patNames = [NSMutableArray array];
-    for (NSString *p in pColon)
-        if ([p length])
-            [patNames addObject:p];
+    NSUInteger pCount = [pColon count];
+    for (NSUInteger k = 0; k < pCount; k++) {
+        NSString *p = [pColon objectAtIndex:k];
+        if ([p length] == 0)
+            continue;
+        /* A fragment sitting after the final colon is a suffix hint, not a
+         * part of its own: "pq:rs" constrains only "pq", while "pq:rs:"
+         * demands a following part too. */
+        if (k == pCount - 1 && ![rule.pattern hasSuffix:@":"])
+            continue;
+        [patNames addObject:p];
+    }
 
-    NSArray *rColon = [rule.replacement componentsSeparatedByString:@":"];
+    /* The replacement selector is used up to its last colon; anything after
+     * that is discarded.  With no colon at all it stands alone as a word. */
+    NSString *replSel = rule.replacement;
+    BOOL replTakesArgs = [replSel rangeOfString:@":"].location != NSNotFound;
+    if (replTakesArgs) {
+        NSRange lastColon = [replSel rangeOfString:@":"
+                                         options:NSBackwardsSearch];
+        replSel = [replSel substringToIndex:NSMaxRange(lastColon)];
+    }
     NSMutableArray *replNames = [NSMutableArray array];
-    for (NSString *p in rColon)
-        if ([p length])
-            [replNames addObject:p];
+    NSUInteger rStart = 0;
+    for (NSUInteger k = 0; k < [replSel length]; k++) {
+        if ([replSel characterAtIndex:k] == ':') {
+            [replNames addObject:[replSel substringWithRange:
+                                  NSMakeRange(rStart, k - rStart)]];
+            rStart = k + 1;
+        }
+    }
     NSUInteger replCount = [replNames count];
 
     NSUInteger len = [text length];
@@ -844,9 +946,10 @@ enum {
                 ok = NO;
         }
 
-        /* selector comparison: message and pattern part names must match. */
-        if (ok && [names count] == [patNames count]) {
-            for (NSUInteger k = 0; k < [names count]; k++)
+        /* Selector comparison: the pattern's parts constrain only the start
+         * of the selector, so a message with extra trailing parts matches. */
+        if (ok && [names count] >= [patNames count]) {
+            for (NSUInteger k = 0; k < [patNames count]; k++)
                 if (![[names objectAtIndex:k] isEqualToString:
                         [patNames objectAtIndex:k]])
                     ok = NO;
@@ -867,14 +970,22 @@ enum {
         if (receiver)
             [build appendString:receiver];
         NSUInteger realArgs = [args count];
-        for (NSUInteger k = 0; k < replCount; k++) {
-            [build appendString:@" "];
-            [build appendString:[replNames objectAtIndex:k]];
-            [build appendString:@":"];
-            if (k < realArgs)
-                [build appendString:[args objectAtIndex:k]];
-            else
-                [build appendFormat:@"<_tops_arg%lu>", (unsigned long)(2 * k)];
+        if (!replTakesArgs) {
+            [build appendFormat:@" %@", replSel];
+        } else {
+            for (NSUInteger k = 0; k < replCount; k++) {
+                NSString *nm = [replNames objectAtIndex:k];
+                [build appendString:@" "];
+                /* A one-character replacement part is dropped by the oracle,
+                 * leaving the bare "name:" slot. */
+                if ([nm length] >= 2)
+                    [build appendString:nm];
+                [build appendString:@":"];
+                if (k < realArgs)
+                    [build appendString:[args objectAtIndex:k]];
+                else
+                    [build appendFormat:@"<_tops_arg%lu>", (unsigned long)(2 * k)];
+            }
         }
         [build appendString:@"]"];
         NSString *repl = build;
@@ -882,7 +993,8 @@ enum {
         [out appendString:[text substringWithRange:
                            NSMakeRange(copyStart, msgStart - copyStart)]];
         [out appendString:repl];
-        if (verbose >= 2)
+        /* -dont asks to see the change, so it reports even when quiet. */
+        if (verbose >= 2 || dontWriteFiles)
             [reports addObject:[NSString stringWithFormat:@"%@:%d: '%@' -> '%@'\n",
                          name, line, matchedText, repl]];
         if (count)
@@ -892,6 +1004,7 @@ enum {
         i = j + 1;
         copyStart = j + 1;
     }
+
 
     if (copyStart < len)
         [out appendString:[text substringFromIndex:copyStart]];
@@ -1103,14 +1216,42 @@ enum {
 /* File / stdin processing.                                            */
 /* ------------------------------------------------------------------ */
 
+/* Apply every rule without producing any output, so the caller can
+ * decide when the reports are shown.  Returns text, reports, count and
+ * changes. */
+- (NSDictionary *) evaluateFile:(NSString *)name data:(NSString *)data
+                          rules:(NSArray *)rules
+{
+    NSMutableArray *reports = [NSMutableArray array];
+    NSMutableArray *groups = [NSMutableArray array];
+    int count = 0;
+    int changes = 0;
+    NSString *current = data;
+
+    for (TPRule *rule in rules) {
+        NSUInteger before = [reports count];
+        current = [self applyRule:rule to:current
+                         withName:name reports:reports
+                            count:&count changes:&changes];
+        [groups addObject:[reports subarrayWithRange:
+                           NSMakeRange(before, [reports count] - before)]];
+    }
+
+    return [NSDictionary dictionaryWithObjectsAndKeys:
+                current, @"text",
+                reports, @"reports",
+                groups, @"groups",
+                [NSNumber numberWithInt:count], @"count",
+                [NSNumber numberWithInt:changes], @"changes", nil];
+}
+
 /* Process one file: apply every rule, print the per-file diagnostics.
- * The progress bar is handled at the batch level by the caller; the
- * replacemethod form has its own mid-run bar layout which is cloned
- * here when the batch is a single file. */
+ * The replacemethod form is intercepted by the caller, which owns its bar
+ * layout, so this handles the find/replace progress bar only. */
 - (unsigned long) processFile:(NSString *)name data:(NSString *)data
-                       rules:(NSArray *)rules
-                  hasReplaceMethod:(BOOL)hasRM
-                  single:(BOOL)single grandTotal:(unsigned long)grandTotal
+                        rules:(NSArray *)rules
+                   hasReplaceMethod:(BOOL)hasRM
+                   single:(BOOL)single grandTotal:(unsigned long)grandTotal
 {
     NSMutableArray *reports = [NSMutableArray array];
     int count = 0;
@@ -1123,36 +1264,6 @@ enum {
                          withName:name reports:reports
                             count:&count changes:&changes];
 
-    if (hasRM && single && ui) {
-        /* Oracle layout for a single replacemethod file: substitution
-         * reports precede a partially drawn bar; the summary and the
-         * "written" line sit inside the lower row, which finishes after. */
-        if (verbose >= 2)
-            [self printReports:reports];
-
-        updateStatusBar(0, grandTotal);      /* top row + '['            */
-        for (; gBarDots < 57; gBarDots++)
-            putchar('.');
-        fflush(stdout);
-
-        if (count > 0)
-            fprintf(stdout, "%s: %d occurrences found\n", [name UTF8String], count);
-
-        if (!dontWriteFiles && changes > 0) {
-            if (ui)
-                fprintf(stdout, "%s written\n", [name UTF8String]);
-            if (![name isEqualToString:@"StandardInput"]) {
-                NSError *err = nil;
-                if (![current writeToFile:name atomically:YES
-                      encoding:NSUTF8StringEncoding error:&err]) {
-                    fprintf(stderr, "***Could not write %s\n", [name UTF8String]);
-                }
-            }
-        }
-
-        updateStatusBar([current length], grandTotal);  /* finish: fill + ']' */
-        return [current length];
-    }
 
     if (verbose >= 2)
         [self printReports:reports];
@@ -1175,6 +1286,14 @@ enum {
 
 - (void) applyRules
 {
+    /* A class hierarchy the parser cannot make sense of stops the run
+     * before any file is touched. */
+    if (classFile != nil) {
+        fprintf(stderr, "***Bad class hierarchy\n");
+        printUsage();
+        return;
+    }
+
     if ([parseString length] == 0) {
         fprintf(stderr, "***No rules specified\n");
         return;
@@ -1182,6 +1301,8 @@ enum {
 
     TopsParser *parser = [[[TopsParser alloc] initWithString:parseString] autorelease];
     NSArray *rules = [parser parse];
+
+    rmIsTTY = isatty(fileno(stdout)) ? YES : NO;
 
     if (rules == nil || [rules count] == 0) {
         if (parser->failed)
@@ -1195,8 +1316,6 @@ enum {
     }
 
     if ([fileNames count] == 0) {
-        /* Standard input is processed line by line.  Each line is
-         * echoed as read; matching lines also print their context. */
         NSFileHandle *fh = [NSFileHandle fileHandleWithStandardInput];
         NSData *d = [fh readDataToEndOfFile];
         NSString *text = [[[NSString alloc] initWithData:d
@@ -1204,6 +1323,69 @@ enum {
         if (text == nil)
             text = @"";
 
+        BOOL hasRM = NO;
+        for (TPRule *rule in rules)
+            if (rule->type == RRReplaceMethod)
+                hasRM = YES;
+
+        /* replacemethod consumes standard input as a whole: the reports
+         * come first, then the result is echoed inside a bar whose lower
+         * row also carries the occurrence count. */
+        if (hasRM) {
+            NSDictionary *res = [self evaluateFile:@"StandardInput" data:text
+                                            rules:rules];
+            NSArray *groups = [res objectForKey:@"groups"];
+            NSString *out = [res objectForKey:@"text"];
+            int c = [[res objectForKey:@"count"] intValue];
+            if (dontWriteFiles)
+                out = text;
+
+            if (rmIsTTY) {
+                /* Standard input cannot be rewritten, so a terminal run just
+                 * echoes the text and shows a completed bar. */
+                fputs([text UTF8String], stdout);
+                if (verbose >= 1) {
+                    rmRuleCount = (int)[groups count];
+                    rmDrawTopRow();
+                    rmOpenLowerRow();
+                    closeReplaceMethodBar();
+                }
+                return;
+            }
+
+            if (verbose >= 2 || dontWriteFiles) {
+                if (verbose >= 1) {
+                    if ([groups count] > 0)
+                        [self printReports:[groups objectAtIndex:0]];
+                } else {
+                    [self printReports:[res objectForKey:@"reports"]];
+                }
+            }
+
+            if (verbose >= 1) {
+                rmRuleCount = (int)[groups count];
+                openReplaceMethodBar();
+                NSUInteger k, gn = [groups count];
+                for (k = 1; k < gn; k++) {
+                    NSArray *g = [groups objectAtIndex:k];
+                    if ([g count] == 0)
+                        continue;
+                    fillReplaceMethodBar(rmCellForRule((int)k));
+                    [self printReports:g];
+                }
+                fillReplaceMethodBar(RM_BAR_CELLS - rmTailCells());
+                fputs([out UTF8String], stdout);
+                if (c > 0)
+                    fprintf(stdout, "%d occurrences\n", c);
+                closeReplaceMethodBar();
+            } else {
+                fputs([out UTF8String], stdout);
+            }
+            return;
+        }
+
+        /* Standard input is processed line by line.  Each line is
+         * echoed as read; matching lines also print their context. */
         NSArray *lines = [text componentsSeparatedByString:@"\n"];
         int count = 0;
         BOOL termByNewline = [text hasSuffix:@"\n"];
@@ -1266,6 +1448,106 @@ enum {
         }
 
     NSUInteger index = 0, total = [fileNames count];
+
+    /* replacemethod keeps its console diagnostics inside the bars.  Each
+     * file is evaluated first, then its banner and reports are printed,
+     * then the previous bar is closed and a new one opened; the last bar
+     * is closed after the loop.  Quiet runs still rewrite the files. */
+    if (hasRM) {
+        BOOL ui = (verbose >= 1);
+        BOOL barOpen = NO;
+        NSArray *groups = nil;
+        for (index = 0; index < total; index++) {
+            NSString *name = [fileNames objectAtIndex:index];
+            if (![fm fileExistsAtPath:name]) {
+                fprintf(stdout, "File %s does not exist\n\n", [name UTF8String]);
+                printUsage();
+                return;
+            }
+            NSString *text = [NSString stringWithContentsOfFile:name
+                                encoding:NSUTF8StringEncoding error:NULL];
+            if (text == nil) {
+                fprintf(stderr, "***Could not read %s\n", [name UTF8String]);
+                continue;
+            }
+            NSDictionary *res = [self evaluateFile:name data:text rules:rules];
+            groups = [res objectForKey:@"groups"];
+
+            if (ui) {
+                NSUInteger remaining = total - index - 1;
+                if (remaining == 0)
+                    fprintf(stdout, "Processing %s (last file)\n", [name UTF8String]);
+                else
+                    fprintf(stdout, "Processing %s (%lu file%s left)\n",
+                            [name UTF8String], (unsigned long)remaining,
+                            remaining == 1 ? "" : "s");
+            }
+
+            BOOL showReports = (verbose >= 2 || dontWriteFiles);
+            if (showReports && verbose < 1)
+                [self printReports:[res objectForKey:@"reports"]];
+
+            if (ui) {
+                rmRuleCount = (int)[groups count];
+                NSUInteger k, gn = [groups count];
+
+                if (rmIsTTY) {
+                    /* On a terminal the first report lands between the two
+                     * rows and the bar is completed before the summary. */
+                    rmDrawTopRow();
+                    if (showReports && gn > 0)
+                        [self printReports:[groups objectAtIndex:0]];
+                    rmOpenLowerRow();
+                    for (k = 1; k < gn; k++) {
+                        NSArray *g = [groups objectAtIndex:k];
+                        if ([g count] == 0)
+                            continue;
+                        fillReplaceMethodBar(rmCellForRule((int)k));
+                        [self printReports:g];
+                    }
+                    closeReplaceMethodBar();
+                } else {
+                    if (showReports && gn > 0)
+                        [self printReports:[groups objectAtIndex:0]];
+                    if (barOpen)
+                        closeReplaceMethodBar();
+                    openReplaceMethodBar();
+                    barOpen = YES;
+
+                    /* Every rule past the first reports from inside the bar. */
+                    for (k = 1; k < gn; k++) {
+                        NSArray *g = [groups objectAtIndex:k];
+                        if ([g count] == 0)
+                            continue;
+                        fillReplaceMethodBar(rmCellForRule((int)k));
+                        [self printReports:g];
+                    }
+                    fillReplaceMethodBar(RM_BAR_CELLS - rmTailCells());
+                }
+
+                int count = [[res objectForKey:@"count"] intValue];
+                if (count > 0)
+                    fprintf(stdout, "%s: %d occurrences found\n",
+                            [name UTF8String], count);
+            }
+
+            if (!dontWriteFiles && [[res objectForKey:@"changes"] intValue] > 0) {
+                if (ui)
+                    fprintf(stdout, "%s written\n", [name UTF8String]);
+                if (![name isEqualToString:@"StandardInput"]) {
+                    NSError *err = nil;
+                    if (![[res objectForKey:@"text"] writeToFile:name atomically:YES
+                            encoding:NSUTF8StringEncoding error:&err])
+                        fprintf(stderr, "***Could not write %s\n",
+                                [name UTF8String]);
+                }
+            }
+        }
+        if (barOpen)
+            closeReplaceMethodBar();
+        return;
+    }
+
     BOOL barDrawn = NO;
     unsigned long readCount = 0;
     for (NSString *name in fileNames) {

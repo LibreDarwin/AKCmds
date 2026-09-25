@@ -99,9 +99,22 @@ $(OBJDIR)/tops.o: src/tops/tops.m
 parity: all
 	MY="build/$(CONFIG)/tops" bash tests/parity.sh --all
 
-test: parity
+# Byte-parity check against Apple's /usr/bin/tiff2icns, run by
+# tests/tiff2icns-parity.sh.  Same MY convention and same reasoning about
+# prerequisites and bash as parity above; that script needs python3 to build
+# its TIFF fixtures.
+tiff2icns-parity: all
+	MY="build/$(CONFIG)/tiff2icns" bash tests/tiff2icns-parity.sh
+
+# Same idea for open.  The harness only runs invocations that both tools
+# reject before anything can be launched, and it fails the case if one of
+# them ever starts succeeding.
+open-parity: all
+	MY="build/$(CONFIG)/open" bash tests/open-parity.sh
+
+test: parity tiff2icns-parity open-parity
 
 clean:
 	rm -rf build
 
-.PHONY: all parity test clean
+.PHONY: all parity tiff2icns-parity open-parity test clean

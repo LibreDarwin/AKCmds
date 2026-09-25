@@ -177,6 +177,26 @@ encode_one(const tuimg_t *im, int compression, unsigned char **out,
 	return 0;
 }
 
+/* The reference tool distinguishes a file that is absent from one that
+ * exists but is not a TIFF, and words the two failures differently. */
+static int
+report_open_failure(const tiff_t *t, const char *path)
+{
+	if (t->openerc == TUFF_ENOENT) {
+		fprintf(stderr, "Error: Failed to create image source for file "
+		    "%s. Either it isn't a TIFF file, or there are unrecognized "
+		    "tags; try tiffutil -dump for more info.\n", path);
+		fprintf(stderr, "Error: Can't read from file %s.\n", path);
+		fprintf(stderr, "No output file created due to errors.\n");
+	} else {
+		fprintf(stderr, "Error: Can't open %s. Either it isn't a TIFF "
+		    "file, or there are unrecognized tags; try tiffutil -dump for "
+		    "more info.\n", path);
+		fprintf(stderr, "No output file created due to errors.\n");
+	}
+	return 5;
+}
+
 static int
 write_operations(const char *cmd, const char *inpath, const char *outpath)
 {
@@ -192,8 +212,9 @@ write_operations(const char *cmd, const char *inpath, const char *outpath)
 		compression = COMP_PACKBITS;
 
 	if (tiff_open_file(&t, inpath) < 0) {
+		int rc = report_open_failure(&t, inpath);
 		tiff_close(&t);
-		return 0;               /* the reference tool exits 0 here */
+		return rc;
 	}
 	if (load_image(&t, 0, &im, &err) < 0) {
 		tiff_close(&t);
@@ -223,6 +244,11 @@ main(int argc, char **argv)
 	int i;
 
 	for (i = 1; i < argc; i++) {
+		const char *a0 = argv[i];
+		if (a0[0] == '-' && a0[1] != '\0' &&
+		    (strcmp(a0, "-info") == 0 || strcmp(a0, "-verboseinfo") == 0 ||
+		    strcmp(a0, "-dump") == 0))
+			tu_set_chatter(1);
 		const char *a = argv[i];
 		if (a[0] == '-' && a[1] != '\0') {
 			if (strcmp(a, "-out") == 0) {
@@ -275,8 +301,9 @@ main(int argc, char **argv)
 	if (have_extract >= 0) {
 		tiff_t t;
 		if (tiff_open_file(&t, inpath) < 0) {
+			int rc = report_open_failure(&t, inpath);
 			tiff_close(&t);
-			return 0;
+			return rc;
 		}
 		if (have_extract >= t.ndir) {
 			fprintf(stderr, "Error: %s has only %d image%s.\n", inpath,

@@ -22,6 +22,7 @@ typedef struct {
 } tiff_ent_t;
 
 typedef struct {
+	int openerc;                  /* TUFF_* from the last open attempt */
 	int be;                       /* big-endian when set */
 	unsigned char *data;
 	size_t len;
@@ -39,6 +40,12 @@ uint16_t rd_be16(const unsigned char *p, int be);
 uint32_t rd_be32(const unsigned char *p, int be);
 
 int tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len);
+extern int tu_chatter;
+void tu_set_chatter(int on);
+
+#define TUFF_ENOENT (-2)
+#define TUFF_EOPEN  (-1)
+
 int tiff_open_file(tiff_t *t, const char *path);
 void tiff_close(tiff_t *t);
 void tiff_sort_entries(tiff_t *t);

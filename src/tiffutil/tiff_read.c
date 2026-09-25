@@ -245,12 +245,14 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 	else if (data[0] == 'I' && data[1] == 'I')
 		be = 0;
 	else {
-		tu_warn("TIFFOpen: Unknown image file format.\n");
+		if (tu_chatter)
+			tu_warn("TIFFOpen: Unknown image file format.\n");
 		return -1;
 	}
 	if (rd_be16(data + 2, be) != 42) {
-		tu_warn("TIFFOpen: Not a TIFF file, bad version number %u.\n",
-		    (unsigned)rd_be16(data + 2, be));
+		if (tu_chatter)
+			tu_warn("TIFFOpen: Not a TIFF file, bad version number %u.\n",
+			    (unsigned)rd_be16(data + 2, be));
 		return -1;
 	}
 
@@ -371,6 +373,14 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 	return 0;
 }
 
+int tu_chatter;
+
+void
+tu_set_chatter(int on)
+{
+	tu_chatter = on;
+}
+
 int
 tiff_open_file(tiff_t *t, const char *path)
 {
@@ -384,12 +394,20 @@ tiff_open_file(tiff_t *t, const char *path)
 	int rc;
 
 	if (f == NULL) {
-		fprintf(stderr, "TIFFOpen: %s: ", path);
-		fprintf(stderr, "%s.\n", strerror(errno));
-		fprintf(stderr, "Error: Can't open %s. Either it isn't readable, "
-		    "it isn't a TIFF file, or there are unrecognized tags; "
-		    "try tiffutil -dump for more info.\n", path);
-		return -1;
+		if (errno == ENOENT) {
+			t->openerc = TUFF_ENOENT;
+			return TUFF_ENOENT;
+		}
+		if (tu_chatter) {
+			fprintf(stderr, "TIFFOpen: %s: ", path);
+			fprintf(stderr, "%s.\n", strerror(errno));
+			fprintf(stderr, "Error: Can't open %s. Either it isn't "
+			    "readable, it isn't a TIFF file, or there are "
+			    "unrecognized tags; try tiffutil -dump for more "
+			    "info.\n", path);
+		}
+		t->openerc = TUFF_EOPEN;
+		return TUFF_EOPEN;
 	}
 	for (;;) {
 		size_t n;

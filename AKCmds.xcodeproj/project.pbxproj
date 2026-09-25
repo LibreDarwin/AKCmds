@@ -18,6 +18,7 @@
 		A10000010000000000000009 /* CoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000007 /* CoreServices.framework */; };
 		A10000010000000000000010 /* tiff2icns.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000010 /* tiff2icns.m */; };
 		A10000010000000000000011 /* ImageIO.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A40000010000000000000008 /* ImageIO.framework */; };
+		A10000010000000000000015 /* tops.m in Sources */ = {isa = PBXBuildFile; fileRef = A30000010000000000000015 /* tops.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,8 @@
 		A30000010000000000000001 /* pbcopy.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = pbcopy.m; sourceTree = "<group>"; };
 		A30000010000000000000002 /* open.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = open.m; sourceTree = "<group>"; };
 		A30000010000000000000010 /* tiff2icns.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tiff2icns.m; sourceTree = "<group>"; };
+		A20000010000000000000015 /* tops */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = tops; sourceTree = BUILT_PRODUCTS_DIR; };
+		A30000010000000000000015 /* tops.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = tops.m; sourceTree = "<group>"; };
 		A40000010000000000000002 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		A40000010000000000000003 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		A40000010000000000000004 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
@@ -86,6 +89,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A50000010000000000000014 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000004 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -104,6 +115,7 @@
 				A60000050000000000000002 /* pbcopy */,
 				A60000050000000000000003 /* open */,
 				A60000050000000000000010 /* tiff2icns */,
+				A60000050000000000000011 /* tops */,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -132,6 +144,14 @@
 			path = tiff2icns;
 			sourceTree = "<group>";
 		};
+		A60000050000000000000011 /* tops */ = {
+			isa = PBXGroup;
+			children = (
+				A30000010000000000000015 /* tops.m */,
+			);
+			path = tops;
+			sourceTree = "<group>";
+		};
 		A60000030000000000000004 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -153,6 +173,7 @@
 				A20000010000000000000002 /* pbpaste */,
 				A20000010000000000000003 /* open */,
 				A20000010000000000000010 /* tiff2icns */,
+				A20000010000000000000015 /* tops */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -224,6 +245,22 @@
 			productReference = A20000010000000000000010 /* tiff2icns */;
 			productType = "com.apple.product-type.tool";
 		};
+		A70000010000000000000015 /* tops */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000010000000000000012 /* Build configuration list for PBXNativeTarget "tops" */;
+			buildPhases = (
+				A50000010000000000000015 /* Sources */,
+				A50000010000000000000014 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = tops;
+			productName = tops;
+			productReference = A20000010000000000000015 /* tops */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -250,6 +287,7 @@ targets = (
 				A00000010000000000000002 /* pbpaste */,
 				A70000010000000000000003 /* open */,
 				A70000010000000000000010 /* tiff2icns */,
+				A70000010000000000000015 /* tops */,
 			);
 		};
 /* End PBXProject section */
@@ -284,6 +322,14 @@ targets = (
 			buildActionMask = 2147483647;
 			files = (
 				A10000010000000000000010 /* tiff2icns.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A50000010000000000000015 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000015 /* tops.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -388,6 +434,20 @@ targets = (
 			};
 			name = Release;
 		};
+		A80000010000000000000010 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A80000010000000000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -437,6 +497,15 @@ targets = (
 			buildConfigurations = (
 				A8000001000000000000000D /* Debug */,
 				A8000001000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000010000000000000012 /* Build configuration list for PBXNativeTarget "tops" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A80000010000000000000010 /* Debug */,
+				A80000010000000000000011 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

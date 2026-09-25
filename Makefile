@@ -37,7 +37,10 @@ OPEN_OBJS := $(OBJDIR)/open.o
 TIFF2ICNS_BIN := $(BUILD_DIR)/tiff2icns
 TIFF2ICNS_OBJS := $(OBJDIR)/tiff2icns.o
 
-all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN)
+TOPS_BIN := $(BUILD_DIR)/tops
+TOPS_OBJS := $(OBJDIR)/tops.o
+
+all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN) $(TOPS_BIN)
 
 $(PB_COPY): $(PB_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -70,6 +73,14 @@ $(TIFF2ICNS_BIN): $(TIFF2ICNS_OBJS)
 $(OBJDIR)/tiff2icns.o: src/tiff2icns/tiff2icns.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/tiff2icns/tiff2icns.m
+
+$(TOPS_BIN): $(TOPS_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(MFLAGS) -o $@ $(TOPS_OBJS) -framework Foundation -lobjc
+
+$(OBJDIR)/tops.o: src/tops/tops.m
+	@mkdir -p $(OBJDIR)
+	$(CC) $(MFLAGS) -c -o $@ src/tops/tops.m
 
 test: all
 

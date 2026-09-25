@@ -1,0 +1,325 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/tops.
+.TH TOPS 1 "September 25, 2026" "LibreDarwin"
+.SH NAME
+\fBtops\fR \- in-place textual substitution tool for source files
+.SH SYNOPSIS
+.B tops
+[\fB\-help\fR] [\fB\-dont\fR] [\fB\-semiverbose\fR] [\fB\-verbose\fR]
+[\fB\-nocontext\fR] [\fB\-nofileinfo\fR]
+[\fB\-scriptfile\fR \fIscript\fR] [\fB\-classfile\fR \fIclassfile\fR]
+[\fB\-find\fR \fIpattern\fR]
+[\fB\-replace\fR \fIpattern\fR \fIwith\fR \fIreplacement\fR]
+[\fB\-replacemethod\fR \fIselector\fR \fIwith\fR \fInew-selector\fR]
+[\fIfilenames\fR ...]
+.SH DESCRIPTION
+.B tops
+rewrites files in place by applying a sequence of textual rules, and reports
+what it found.  It is built for source trees: patterns are matched at the
+token level, comments and string literals are treated as opaque, and named
+tokens can be used to constrain or nest rules.
+.PP
+Rules may be given on the command line, as operands of
+.BR find ,
+.B replace
+and
+.BR replacemethod ,
+or in a script file named with
+.BR \-scriptfile .
+Both are turned into the same text and parsed by the same parser, so the two
+forms accept the same rules.  A rule keyword may be written with or without a
+leading dash, and an operand given on the command line may be passed bare,
+because each operand is quoted before it is parsed.  In a script file the
+operands must themselves be quoted.
+.PP
+Each
+.I filename
+is read, every rule is applied in the order given, and the result is written
+back only if some rule changed it.  With no
+.I filename
+the text is read from standard input and the transformed text is echoed to
+standard output instead.
+.SH OPTIONS
+.TP
+.B \-help
+Print the usage summary and exit.
+.TP
+.B \-dont
+Do not write any file.  The change that would have been made is still
+reported, even when the run is quiet, so a dry run shows its work.
+.TP
+.B \-semiverbose
+Print the per-file banner and the occurrence count for each file.
+.TP
+.B \-verbose
+Also print every match of a
+.B replace
+or
+.B replacemethod
+rule, as
+.IR file : line : "'" old "' -> '" new "'" .
+.TP
+.B \-nocontext
+Drop the matching line from the report of a
+.B find
+rule and report only the text that matched, as
+.IR file : line : matched-text .
+Reports of
+.B replace
+and
+.B replacemethod
+keep their line context.
+.TP
+.B \-nofileinfo
+Omit the file name and line number from the reports of a
+.B find
+rule, leaving only the text itself.  The reports of
+.B replace
+and
+.B replacemethod
+keep them, and the per-file banner and the occurrence count are unaffected.
+.TP
+.BI \-scriptfile " script"
+Read the rules from
+.IR script .
+.SH "SCRIPT FILE FORMAT"
+A script file is a list of rules, one per line.  A rule keyword may carry a
+leading dash.  A comma does not separate rules: it ends the parser, which
+reports the rest of the line as an error.  The grammar is:
+.PP
+.RS
+.nf
+find <search_pattern> [where (<symbol>...) isOneOf {(<match>...)...}]...
+
+replace <search_pattern> with <replacement_pattern> | same
+    [where (<symbol>...) isOneOf {(<match>...)...}]...
+    [within (<symbol>) {rules...}]...
+    [error <message>] [warning <message>]
+
+replacemethod <selector> with <new_selector>
+    { [replace <symbol> with <symbol_replacement>]... }
+    [where (<symbol>...) isOneOf {(<match>...)...}]...
+    [within (<symbol>) {rules...}]...
+    [error <message>] [warning <message>]
+.fi
+.RE
+.PP
+The
+.B with
+keyword between the two patterns of a
+.B replace
+rule is optional, so
+.B replace "a" "b"
+and
+.B replace "a" with "b"
+are the same rule.  A
+.B replacemethod
+selector must be quoted, as must every operand of a
+.B where
+clause.
+.SH RULES
+.TP
+.BI find " pattern"
+Report every match of
+.I pattern
+and leave the file alone.
+.TP
+.BI replace " pattern" " with " replacement
+Replace every match of
+.I pattern
+with
+.IR replacement .
+Writing
+.B same
+instead of a replacement leaves the matched text unchanged and reports
+nothing: the rule is a no-op that neither counts nor rewrites.
+.TP
+.BI replacemethod " selector" " with " new-selector
+Rename the colon-terminated parts of an Objective-C method message that
+appears in
+.RB \(oq [obj\ sel:1] \(cq
+or
+.RB \(oq [obj\ sel:2] \(cq
+style context lines.  A pattern part is matched as a prefix and the trailing
+colon is part of the pattern, so a part with no colon never matches, and the
+message may carry more parts than the pattern but never fewer.  A
+.I new-selector
+is truncated at its last colon.  Inside the braces, each
+.BI replace " symbol" " with " symbol-replacement
+renames one part, a missing argument becomes
+.BR <_tops_argN> ,
+and a part name shorter than two characters is dropped from the output while
+keeping its slot.
+.TP
+.BI error " message"
+.TQ
+.BI warning " message"
+Insert a comment line at the start of every source line the rule matches,
+.B #error
+for
+.B error
+and
+.B #warning
+for
+.BR warning ,
+one such line per match, so a line matched n times gains n comment lines.
+When a rule carries both, only the
+.B #error
+line is inserted.  Each inserted line is itself counted, so the reported
+number of occurrences is twice the number of matches.  A rule that matches
+nothing inserts nothing, and the
+.I message
+itself is never printed.  These clauses are not accepted on a
+.B find
+rule, which reports a parse error instead.
+.SH PATTERNS
+Patterns are matched as tokens, not as raw text.  A word is a run of letters,
+digits, underscores and dollar signs, and any other character delimits words,
+so the pattern
+.B foo
+matches inside
+.BR foo; ,
+.B foo = bar
+and
+.BR [foo:1] ,
+but not inside
+.BR foobar .
+Whitespace in a pattern matches one or more whitespace characters, so
+.B "int a"
+matches
+.BR "int  a" ,
+while whitespace at the start or end of a pattern is ignored.
+.PP
+Text inside a comment or a quoted literal is never matched, replaced or
+reported.  The recognized regions are
+.BR // " to end of line,"
+.BR /* " to */,"
+and single- or double-quoted literals with backslash escapes.  An
+unterminated
+.B /*
+runs to the end of the input.
+.PP
+A name in angle brackets,
+.BR <foo> ,
+matches any run of text and is captured.  A captured name can be named in a
+.B where
+or
+.B within
+clause, and the full spelling, including the angle brackets and any type
+label, is the name to use:
+.PP
+.RS
+.nf
+replace "foo=<e x>" with "X" where ("<e x>") isOneOf {("1")}
+.fi
+.RE
+.SH "WHERE AND WITHIN"
+.BI where " (" symbols ")" " isOneOf {" tuples "}"
+restricts a match to the values its pattern captured.  Each symbol is the
+full text of a named token, so
+.B ("<e x>")
+refers to a token written
+.B <e x>
+in the pattern.  Each tuple lists one value per symbol, and a clause passes
+when any one of its tuples equals the captured values exactly.  Several
+.B where
+clauses may be given and all of them must pass.  A clause that names a token
+the pattern did not capture is ignored, so a pattern without
+.B <e x>
+is unaffected by a clause about it.
+.PP
+.BI within " (" symbol ") {" rules "}"
+runs a nested set of rules inside the text captured by a named token, which
+is how a method argument or a bracketed value is rewritten on its own.
+.SH REPORTING
+The reports of a
+.B find
+rule are printed in every mode, including the default quiet one, because
+.B find
+never changes a file.  The reports of a
+.B replace
+or
+.B replacemethod
+rule are printed only under
+.B \-verbose
+or
+.BR \-dont ,
+as
+.IR file : line : "'" old "' -> '" new "'" ;
+.B \-nocontext
+and
+.B \-nofileinfo
+reshape those two lines as described above.
+.PP
+The per-file banner
+.BI "Processing " file
+and the total
+.IB file ": " N " occurrences found"
+need
+.B \-semiverbose
+or
+.BR \-verbose ;
+.B \-dont
+alone does not print them, because it changes what is done rather than how
+much is said.  A file that was rewritten is announced as
+.IB file " written"
+under the same two options, and never with
+.BR \-dont ,
+which writes nothing.
+.PP
+Standard input is echoed line by line, with the reports interleaved, and
+.B \-verbose
+adds a final count of
+.IR N " occurrences" .
+.PP
+When standard output is a terminal, a two-row progress bar is drawn whose
+lower row fills as the input is consumed, and each dot is flushed
+immediately.  Reports and banners go to standard output; only failures to
+read or write a file are reported on standard error.
+.SH EXIT STATUS
+.B tops
+exits 0 in every case, including a rule that matches nothing, a script it
+cannot parse and a file that does not exist.  The last two print a diagnostic
+and the usage summary on standard output, and a missing class hierarchy is
+reported as
+.B ***Bad class hierarchy
+on standard error.
+.SH EXAMPLES
+Report every occurrence of a symbol in a file, without changing it:
+.PP
+.RS
+.nf
+tops -find dealloc *.m
+.fi
+.RE
+.PP
+Rename a selector across a source tree, writing the changes:
+.PP
+.RS
+.nf
+tops -verbose -replacemethod "oldName:" with "newName:" *.m
+.fi
+.RE
+.PP
+Load rules from a script file, and see the changes without writing them:
+.PP
+.RS
+.nf
+tops -dont -verbose -scriptfile rename.script *.m
+.fi
+.RE
+.PP
+A script file holding the same rename:
+.PP
+.RS
+.nf
+replacemethod "oldName:" with "newName:"
+replace "<e x>" with "X" within ("<e x>") { replace "tmp" with "cache" }
+.fi
+.RE
+.SH SEE ALSO
+.BR open (1),
+.BR pbcopy (1),
+.BR pbpaste (1)

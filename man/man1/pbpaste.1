@@ -1,3 +1,18 @@
 .\" Copyright (C) 2026, LibreDarwin
 .\" SPDX-License-Identifier: BSD-3-Clause
-.so man1/pbcopy.1
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/pbpaste.  The prose lives in pbcopy.1, which documents both
+.\" programs; .so is used here to share it, and ln(1) is the portable form.
+.TH PBPASTE 1 "September 25, 2026" "LibreDarwin"
+.SH NAME
+\fBpbpaste\fR \- write the pasteboard to standard output
+.SH DESCRIPTION
+.B pbpaste
+writes the first available pasteboard item to standard output, choosing the
+type as described in
+.BR pbcopy (1).
+.SH SEE ALSO
+.BR pbcopy (1),
+.BR open (1),
+.BR textutil (1)
+.BR tiffutil (1)

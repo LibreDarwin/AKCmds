@@ -365,11 +365,39 @@ enum {
 @property (retain) NSArray *withinSymbols;  /* within: "<x>" (one per clause)      */
 @property (retain) NSArray *withinRules;    /* within: array of NSArray of TPRule  */
 @property (retain) NSArray *subRules;       /* replacemethod: array of TPRule      */
+@property (retain) NSMutableDictionary *diagLines;
 @end
 
 @implementation TPRule
 @synthesize pattern, replacement, errorMsg, warningMsg;
-@synthesize whereClauses, withinSymbols, withinRules, subRules;
+@synthesize whereClauses, withinSymbols, withinRules, subRules, diagLines;
+@end
+
+/* A find rule reports every match whatever the verbosity, so its report has
+ * to stay distinguishable from the replace and replacemethod reports, which
+ * are only shown when the run is verbose or -dont. */
+@interface TPFindReport : NSObject {
+@public
+    NSString *text;
+}
+@property (readonly) NSString *text;
+- (id) initWithText:(NSString *)text;
+@end
+
+@implementation TPFindReport
+@synthesize text;
+- (id) initWithText:(NSString *)t
+{
+    self = [super init];
+    if (self)
+        text = [t retain];
+    return self;
+}
+- (void) dealloc
+{
+    [text release];
+    [super dealloc];
+}
 @end
 
 /* ------------------------------------------------------------------ */
@@ -476,6 +504,23 @@ enum {
     if (r.location + r.length <= len &&
         [src compare:kw options:NSLiteralSearch range:r] == NSOrderedSame) {
         pos += n;
+        return YES;
+    }
+    return NO;
+}
+
+- (BOOL) ruleTypeKeyword:(NSString *)kw
+{
+    NSUInteger p = pos;
+    NSUInteger len = [src length];
+    NSUInteger n = [kw length];
+
+    if (p < len && [src characterAtIndex:p] == '-')
+        p++;
+    if (p + n <= len &&
+        [src compare:kw options:NSLiteralSearch
+               range:NSMakeRange(p, n)] == NSOrderedSame) {
+        pos = p + n;
         return YES;
     }
     return NO;
@@ -634,9 +679,19 @@ enum {
             rule.withinSymbols = syms;
             rule.withinRules = [NSArray arrayWithObject:subs];
         } else if ([self keyword:@"error"]) {
+            if (rtype == RRFind) {
+                failed = YES;
+                lastError = 5;
+                return rule;
+            }
             [self skipWS];
             rule.errorMsg = [self parseQuoted];
         } else if ([self keyword:@"warning"]) {
+            if (rtype == RRFind) {
+                failed = YES;
+                lastError = 6;
+                return rule;
+            }
             [self skipWS];
             rule.warningMsg = [self parseQuoted];
         } else {
@@ -655,19 +710,19 @@ enum {
         [self skipWS];
         if (pos >= len)
             break;
-        if ([self keyword:@"find"]) {
+        if ([self ruleTypeKeyword:@"find"]) {
             TPRule *r = [self parseReplaceRule:RRFind];
             if (r.pattern)
                 [rules addObject:r];
             else
                 failed = YES;
-        } else if ([self keyword:@"replacemethod"]) {
+        } else if ([self ruleTypeKeyword:@"replacemethod"]) {
             TPRule *r = [self parseReplaceRule:RRReplaceMethod];
             if (r.pattern)
                 [rules addObject:r];
             else
                 failed = YES;
-        } else if ([self keyword:@"replace"]) {
+        } else if ([self ruleTypeKeyword:@"replace"]) {
             TPRule *r = [self parseReplaceRule:RRReplace];
             if (r.pattern)
                 [rules addObject:r];
@@ -700,6 +755,7 @@ enum {
     BOOL dontWriteFiles;
     int verbose;
     int hideContext;
+    BOOL hideFileInfo;
     BOOL useStdin;
 }
 @property (retain) NSMutableString *parseString;
@@ -721,6 +777,7 @@ enum {
         dontWriteFiles = NO;
         verbose = 0;
         hideContext = NO;
+        hideFileInfo = NO;
         useStdin = NO;
     }
     return self;
@@ -770,7 +827,7 @@ static NSString *stripRuleSeparator(NSString *s)
         } else if ([arg isEqualToString:@"-nocontext"]) {
             hideContext = YES;
         } else if ([arg isEqualToString:@"-nofileinfo"]) {
-            verbose = 0;
+            hideFileInfo = YES;
         } else if ([arg isEqualToString:@"-scriptfile"] ||
                    [arg isEqualToString:@"scriptfile"]) {
             if (i + 1 < count)
@@ -803,12 +860,19 @@ static NSString *stripRuleSeparator(NSString *s)
                     [parseString appendFormat:@"where \"%@\"", next];
             }
         } else if ([arg isEqualToString:@"isOneOf"] ||
-                   [arg isEqualToString:@"within"] ||
-                   [arg isEqualToString:@"error"] ||
-                   [arg isEqualToString:@"warning"] ||
-                   [arg isEqualToString:@"message"]) {
+                   [arg isEqualToString:@"within"]) {
             if (i + 1 < count)
                 [parseString appendFormat:@"%@ %@", arg, [args objectAtIndex:++i]];
+        } else if ([arg isEqualToString:@"error"] ||
+                   [arg isEqualToString:@"warning"] ||
+                   [arg isEqualToString:@"message"]) {
+            if (i + 1 < count) {
+                NSString *next = [args objectAtIndex:++i];
+                if ([next hasPrefix:@"\""])
+                    [parseString appendFormat:@"%@ %@", arg, next];
+                else
+                    [parseString appendFormat:@"%@ \"%@\"", arg, next];
+            }
         } else if ([arg isEqualToString:@"}"]) {
             [parseString appendString:@"}"];
         } else if ([arg isEqualToString:@"-"]) {
@@ -854,6 +918,16 @@ static NSString *stripRuleSeparator(NSString *s)
     else if (kind == 4)
         head = [NSString stringWithFormat:
             @"Expected ')', character position = %lu\n%s\n\n",
+            (unsigned long)(atPos + 1), [rest UTF8String]];
+    else if (kind == 5)
+        head = [NSString stringWithFormat:
+            @"Error clauses are not allowed in this context..., "
+             "character position = %lu\n%s\n\n",
+            (unsigned long)(atPos + 1), [rest UTF8String]];
+    else if (kind == 6)
+        head = [NSString stringWithFormat:
+            @"Warning clauses are not allowed in this context..., "
+             "character position = %lu\n%s\n\n",
             (unsigned long)(atPos + 1), [rest UTF8String]];
     else
         head = [NSString stringWithFormat:
@@ -1068,11 +1142,10 @@ static NSString *stripRuleSeparator(NSString *s)
 
         [out appendString:[text substringWithRange:
                            NSMakeRange(copyStart, msgStart - copyStart)]];
+        [self noteDiagMatch:rule line:line];
         [out appendString:repl];
-        /* -dont asks to see the change, so it reports even when quiet. */
-        if (verbose >= 2 || dontWriteFiles)
-            [reports addObject:[NSString stringWithFormat:@"%@:%d: '%@' -> '%@'\n",
-                         name, line, matchedText, repl]];
+        [reports addObject:[NSString stringWithFormat:@"%@:%d: '%@' -> '%@'\n",
+                     name, line, matchedText, repl]];
         if (count)
             (*count)++;
         if (changes && ![repl isEqualToString:matchedText])
@@ -1087,7 +1160,72 @@ static NSString *stripRuleSeparator(NSString *s)
     return out;
 }
 
+- (NSString *) diagHeaderFor:(TPRule *)rule
+{
+    if (rule.errorMsg)
+        return [NSString stringWithFormat:@"#error %@\n", rule.errorMsg];
+    if (rule.warningMsg)
+        return [NSString stringWithFormat:@"#warning %@\n", rule.warningMsg];
+    return nil;
+}
+
+- (void) noteDiagMatch:(TPRule *)rule line:(int)line
+{
+    if (!rule.errorMsg && !rule.warningMsg)
+        return;
+    if (rule.diagLines == nil)
+        rule.diagLines = [NSMutableDictionary dictionary];
+    NSNumber *key = [NSNumber numberWithInt:line];
+    NSUInteger n = [[rule.diagLines objectForKey:key] unsignedIntegerValue];
+    [rule.diagLines setObject:[NSNumber numberWithUnsignedInteger:n + 1]
+                       forKey:key];
+}
+
 - (NSString *) applyRule:(TPRule *)rule to:(NSString *)text
+               withName:(NSString *)name
+                 reports:(NSMutableArray *)reports
+                   count:(int *)count
+                  changes:(int *)changes
+{
+    [rule.diagLines removeAllObjects];
+    NSString *out = [self applyRuleCore:rule to:text
+                              withName:name reports:reports
+                                 count:count changes:changes];
+    if ([rule.diagLines count] == 0)
+        return out;
+
+    NSString *hdr = [self diagHeaderFor:rule];
+    NSMutableString *res = [NSMutableString string];
+    NSUInteger len = [out length], i = 0;
+    int line = 1;
+
+    for (;;) {
+        NSRange nl = [out rangeOfString:@"\n"
+                                 options:0
+                                   range:NSMakeRange(i, len - i)];
+        NSUInteger end = (nl.location == NSNotFound) ? len : nl.location;
+        NSNumber *c = [rule.diagLines objectForKey:
+                          [NSNumber numberWithInt:line]];
+        NSUInteger n = c ? [c unsignedIntegerValue] : 0, k;
+        if (n > 0) {
+            if (line == 1)
+                [res appendString:@"\n"];
+            for (k = 0; k < n; k++)
+                [res appendString:hdr];
+            if (count)
+                *count += (int)n;
+        }
+        [res appendString:[out substringWithRange:NSMakeRange(i, end - i)]];
+        if (nl.location == NSNotFound)
+            break;
+        [res appendString:@"\n"];
+        i = end + 1;
+        line++;
+    }
+    return res;
+}
+
+- (NSString *) applyRuleCore:(TPRule *)rule to:(NSString *)text
                withName:(NSString *)name
                  reports:(NSMutableArray *)reports
                    count:(int *)count
@@ -1276,9 +1414,14 @@ static NSString *stripRuleSeparator(NSString *s)
             lineRange.length = ((f.location == NSNotFound) ? [text length]
                                                            : f.location)
                 - lineRange.location;
-            if (verbose >= 2)
-                [reports addObject:[NSString stringWithFormat:@"%@:%d:%@\n",
-                             name, line, [text substringWithRange:lineRange]]];
+            {
+                NSString *ctx = hideContext ? matchedText
+                                            : [text substringWithRange:lineRange];
+                NSString *pfx = hideFileInfo ? @""
+                        : [NSString stringWithFormat:@"%@:%d:", name, line];
+                [reports addObject:[[TPFindReport alloc] initWithText:
+                        [NSString stringWithFormat:@"%@%@\n", pfx, ctx]]];
+            }
             if (count)
                 (*count)++;
             [out appendString:matchedText];
@@ -1305,13 +1448,13 @@ static NSString *stripRuleSeparator(NSString *s)
             repl = build;
         }
 
-        if (verbose >= 2)
-            [reports addObject:[NSString stringWithFormat:@"%@:%d: '%@' -> '%@'\n",
-                         name, line, matchedText, repl]];
+        [reports addObject:[NSString stringWithFormat:@"%@:%d: '%@' -> '%@'\n",
+                     name, line, matchedText, repl]];
         if (count)
             (*count)++;
         if (changes)
             (*changes)++;
+        [self noteDiagMatch:rule line:line];
         [out appendString:repl];
         si = sj;
     }
@@ -1321,8 +1464,22 @@ static NSString *stripRuleSeparator(NSString *s)
 - (void) printReports:(NSArray *)reports
 {
     NSUInteger i, n = [reports count];
-    for (i = 0; i < n; i++)
-        fputs([[reports objectAtIndex:i] UTF8String], stdout);
+    for (i = 0; i < n; i++) {
+        id r = [reports objectAtIndex:i];
+        if ([r isKindOfClass:[TPFindReport class]])
+            r = [(TPFindReport *)r text];
+        fputs([r UTF8String], stdout);
+    }
+}
+
+- (void) printFindReports:(NSArray *)reports
+{
+    NSUInteger i, n = [reports count];
+    for (i = 0; i < n; i++) {
+        id r = [reports objectAtIndex:i];
+        if ([r isKindOfClass:[TPFindReport class]])
+            fputs([[(TPFindReport *)r text] UTF8String], stdout);
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1378,14 +1535,17 @@ static NSString *stripRuleSeparator(NSString *s)
                             count:&count changes:&changes];
 
 
-    if (verbose >= 2)
+    if (verbose >= 2 || dontWriteFiles)
         [self printReports:reports];
+    else
+        [self printFindReports:reports];
 
     if (ui && count > 0)
         fprintf(stdout, "%s: %d occurrences found\n", [name UTF8String], count);
 
-    if (ui && !dontWriteFiles && changes > 0) {
-        fprintf(stdout, "%s written\n", [name UTF8String]);
+    if (!dontWriteFiles && changes > 0) {
+        if (ui)
+            fprintf(stdout, "%s written\n", [name UTF8String]);
         if (![name isEqualToString:@"StandardInput"]) {
             NSError *err = nil;
             if (![current writeToFile:name atomically:YES
@@ -1473,18 +1633,27 @@ static NSString *stripRuleSeparator(NSString *s)
                 } else {
                     [self printReports:[res objectForKey:@"reports"]];
                 }
+            } else if (verbose >= 1) {
+                if ([groups count] > 0)
+                    [self printFindReports:[groups objectAtIndex:0]];
+            } else {
+                [self printFindReports:[res objectForKey:@"reports"]];
             }
 
             if (verbose >= 1) {
                 rmRuleCount = (int)[groups count];
                 openReplaceMethodBar();
                 NSUInteger k, gn = [groups count];
+                BOOL all = (verbose >= 2 || dontWriteFiles);
                 for (k = 1; k < gn; k++) {
                     NSArray *g = [groups objectAtIndex:k];
                     if ([g count] == 0)
                         continue;
                     fillReplaceMethodBar(rmCellForRule((int)k));
-                    [self printReports:g];
+                    if (all)
+                        [self printReports:g];
+                    else
+                        [self printFindReports:g];
                 }
                 fillReplaceMethodBar(RM_BAR_CELLS - rmTailCells());
                 fputs([out UTF8String], stdout);
@@ -1597,8 +1766,12 @@ static NSString *stripRuleSeparator(NSString *s)
             }
 
             BOOL showReports = (verbose >= 2 || dontWriteFiles);
-            if (showReports && verbose < 1)
-                [self printReports:[res objectForKey:@"reports"]];
+            if (verbose < 1) {
+                if (showReports)
+                    [self printReports:[res objectForKey:@"reports"]];
+                else
+                    [self printFindReports:[res objectForKey:@"reports"]];
+            }
 
             if (ui) {
                 rmRuleCount = (int)[groups count];
@@ -1608,20 +1781,31 @@ static NSString *stripRuleSeparator(NSString *s)
                     /* On a terminal the first report lands between the two
                      * rows and the bar is completed before the summary. */
                     rmDrawTopRow();
-                    if (showReports && gn > 0)
-                        [self printReports:[groups objectAtIndex:0]];
+                    if (gn > 0) {
+                        if (showReports)
+                            [self printReports:[groups objectAtIndex:0]];
+                        else
+                            [self printFindReports:[groups objectAtIndex:0]];
+                    }
                     rmOpenLowerRow();
                     for (k = 1; k < gn; k++) {
                         NSArray *g = [groups objectAtIndex:k];
                         if ([g count] == 0)
                             continue;
                         fillReplaceMethodBar(rmCellForRule((int)k));
-                        [self printReports:g];
+                        if (showReports)
+                            [self printReports:g];
+                        else
+                            [self printFindReports:g];
                     }
                     closeReplaceMethodBar();
                 } else {
-                    if (showReports && gn > 0)
-                        [self printReports:[groups objectAtIndex:0]];
+                    if (gn > 0) {
+                        if (showReports)
+                            [self printReports:[groups objectAtIndex:0]];
+                        else
+                            [self printFindReports:[groups objectAtIndex:0]];
+                    }
                     if (barOpen)
                         closeReplaceMethodBar();
                     openReplaceMethodBar();
@@ -1633,7 +1817,10 @@ static NSString *stripRuleSeparator(NSString *s)
                         if ([g count] == 0)
                             continue;
                         fillReplaceMethodBar(rmCellForRule((int)k));
-                        [self printReports:g];
+                        if (showReports)
+                            [self printReports:g];
+                        else
+                            [self printFindReports:g];
                     }
                     fillReplaceMethodBar(RM_BAR_CELLS - rmTailCells());
                 }

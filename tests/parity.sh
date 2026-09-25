@@ -145,6 +145,45 @@ run_script_case() {
     fi
 }
 
+# run_cmd_case <label> <fixture> <args...>
+# Same comparison as run_script_case, but the rule comes from the command
+# line, which is the only way to reach the leading-dash rule keywords and to
+# see how argv operands (patterns, replacements, messages) are re-quoted.
+run_cmd_case() {
+    local lab="$1" fixture="$2"
+    shift 2
+    local o="$ROOT/co" m="$ROOT/cm"
+    rm -rf "$o" "$m"
+    mkdir -p "$o" "$m"
+    printf '%b' "$fixture" > "$o/f.m"
+    cp "$o/f.m" "$m/f.m"
+
+    ( cd "$o" && "$ORACLE" "$@" f.m > .stdout 2>&1 </dev/null )
+    local orc=$?
+    ( cd "$m" && "$MY" "$@" f.m > .stdout 2>&1 </dev/null )
+    local mrc=$?
+
+    local bad=0
+    cmp -s "$o/.stdout" "$m/.stdout" || bad=1
+    [ "$orc" = "$mrc" ] || bad=1
+    cmp -s "$o/f.m" "$m/f.m" || bad=1
+
+    if [ "$bad" = 0 ]; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        FAILED="$FAILED cmd/$lab"
+        echo "FAIL cmd/$lab  (rc $orc vs $mrc)"
+        diff <(od -c -v "$o/.stdout") <(od -c -v "$m/.stdout") |
+            perl -ne 'print "    stdout: $_"'
+        if ! cmp -s "$o/f.m" "$m/f.m"; then
+            echo "    file differs:"
+            diff <(od -c -v "$o/f.m") <(od -c -v "$m/f.m") |
+                perl -ne 'print "      $_"'
+        fi
+    fi
+}
+
 # run_stdin_case <label> <args...>
 # Feeds the fixture on stdin; output is compared byte for byte.
 run_stdin_case() {
@@ -351,6 +390,92 @@ run_script() {
     run_script_case "where tuple arity short" 'foo=1;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {("1" "2")}' -verbose
     run_script_case "where tuple arity long" 'a=1 b=2;\n' 'replace "a=<e x> b=<e y>" with "X" where ("<e x>" "<e y>") isOneOf {("1")}' -verbose
     run_script_case "where empty tuple" 'foo=1;\n' 'replace "foo=<e x>" with "X" where ("<e x>") isOneOf {()}' -verbose
+
+    echo "== script: error and warning clauses =="
+    # The rewritten file and the occurrence count are compared in every mode
+    # below.  -verbose is deliberately not used with an error or warning
+    # clause: the oracle then numbers its per-match reports as if the inserted
+    # diagnostic headers had already shifted the line, and no simple rule
+    # reproduces that (a first match on a line excludes its own headers, later
+    # ones do not, and the leading blank line counts for every match but the
+    # first).  tops reports the source line instead, which is what the
+    # -semiverbose and quiet cases below pin down.
+    run_script_case "error on find rejected" 'foo\n' 'find "foo" error "b"' -verbose
+    run_script_case "warning on find rejected" 'foo\n' 'find "foo" warning "w"' -verbose
+    run_script_case "error on find extra space" 'foo\n' 'find "foo" error  "b"' -verbose
+    run_script_case "error on find indented" 'foo\n' '  find "foo" error "b"' -verbose
+    run_script_case "error no match" 'foo\n' 'replace "zzz" with "X" error "b"' -verbose
+    run_script_case "error one match" 'foo\n' 'replace "foo" with "X" error "b"' -verbose
+    run_script_case "error two matches same line" 'foo foo bar\n' 'replace "foo" with "X" error "b"' -semiverbose
+    run_script_case "error two lines" 'foo\nfoo\nbar\n' 'replace "foo" with "X" error "b"' -semiverbose
+    run_script_case "error second line only" 'bar\nfoo\n' 'replace "foo" with "X" error "b"' -verbose
+    run_script_case "error after first line" 'foo\nbar\nfoo\n' 'replace "foo" with "X" error "b"' -semiverbose
+    run_script_case "error quiet" 'foo bar\n' 'replace "foo" with "X" error "b"'
+    run_script_case "warning one match" 'foo\n' 'replace "foo" with "X" warning "w"' -verbose
+    run_script_case "error wins over warning" 'foo\n' 'replace "foo" with "X" error "b" warning "w"' -verbose
+    run_script_case "error empty message" 'foo\n' 'replace "foo" with "X" error ""' -verbose
+    run_script_case "error message with spaces" 'foo\n' 'replace "foo" with "X" error "b c d"' -verbose
+    run_script_case "error no trailing newline" 'foo' 'replace "foo" with "X" error "b"' -verbose
+    run_script_case "error on replacemethod" '[obj pq:1]\n[obj pq:2]\n' 'replacemethod "pq:" with "rpq:" error "b"' -semiverbose
+    run_script_case "error same line replacemethod" '[obj pq:1] [obj pq:2]\n' 'replacemethod "pq:" with "rpq:" error "b"' -semiverbose
+    run_script_case "error with dont" 'foo\n' 'replace "foo" with "X" error "b"' -dont -semiverbose
+    run_script_case "error with two rules" 'foo bar\n' 'replace "foo" with "X" error "b"
+replace "bar" with "Y"'
+
+    echo "== script: quiet mode still rewrites =="
+    run_script_case "quiet replace" 'foo bar\n' 'replace "foo" with "X"'
+    run_script_case "quiet replacemethod" '[obj pq:1]\n' 'replacemethod "pq:" with "rpq:"'
+    run_script_case "quiet no match" 'foo bar\n' 'replace "zzz" with "X"'
+    run_script_case "quiet reports nothing" 'int a = foo;\n' 'replace "foo" with "X"'
+    run_script_case "dont reports when quiet" 'int a = foo;\n' 'replace "foo" with "X"' -dont
+
+    echo "== script: find reports in every mode =="
+    run_script_case "find quiet" 'int a = foo;\n' 'find "foo"'
+    run_script_case "find semiverbose" 'int a = foo;\n' 'find "foo"' -semiverbose
+    run_script_case "find dont" 'int a = foo;\n' 'find "foo"' -dont
+    run_script_case "find dont quiet" 'int a = foo;\n' 'find "foo"' -dont
+    run_script_case "find two lines" 'int a = foo;\nint b = foo;\n' 'find "foo"'
+    run_script_case "find two rules" 'a b\nc b\n' 'find "b"
+find "c"'
+    run_script_case "find after replace" 'a b\nc b\n' 'replace "a" with "X"
+find "b"'
+    run_script_case "find nofileinfo" 'int a = foo;\n' 'find "foo"' -nofileinfo
+    run_script_case "find nofileinfo verbose" 'int a = foo;\n' 'find "foo"' -nofileinfo -verbose
+    run_script_case "find nofileinfo nocontext" 'int a = foo;\n' 'find "foo"' -nofileinfo -nocontext
+    run_script_case "replace nofileinfo keeps prefix" 'int a = foo;\n' 'replace "foo" with "X"' -nofileinfo -verbose
+
+    echo "== script: nocontext =="
+    run_script_case "nocontext find" 'int a = foo;\n' 'find "foo"' -verbose -nocontext
+    run_script_case "nocontext find quiet" 'int a = foo;\n' 'find "foo"' -nocontext
+    run_script_case "nocontext find multiword" 'int a = foo bar;\n' 'find "foo bar"' -verbose -nocontext
+    run_script_case "nocontext replace" 'int a = foo;\n' 'replace "foo" with "X"' -verbose -nocontext
+    run_script_case "nocontext without" 'int a = foo;\n' 'find "foo"' -verbose
+}
+
+run_cmd() {
+    echo "== cmd: leading dash rule keywords =="
+    run_cmd_case "dash find" 'int a = foo;\n' -verbose -find foo
+    run_cmd_case "dash replace" 'int a = foo;\n' -verbose -replace foo with X
+    run_cmd_case "dash replacemethod" '[obj pq:1]\n' -verbose -replacemethod pq: with rpq:
+    run_cmd_case "bare find" 'int a = foo;\n' -verbose find foo
+    run_cmd_case "bare replace" 'int a = foo;\n' -verbose replace foo with X
+    run_cmd_case "dash find quiet" 'int a = foo;\n' -find foo
+    run_cmd_case "dash nocontext" 'int a = foo;\n' -verbose -nocontext -find foo
+
+    echo "== cmd: quiet mode still rewrites, dont reports anyway =="
+    run_cmd_case "dash replace quiet" 'int a = foo;\n' -replace foo with X
+    run_cmd_case "dash replacemethod quiet" '[obj pq:1]\n' -replacemethod pq: with rpq:
+    run_cmd_case "dash find nofileinfo" 'int a = foo;\n' -nofileinfo -find foo
+    run_cmd_case "dash find nofileinfo verbose" 'int a = foo;\n' -nofileinfo -verbose -find foo
+    run_cmd_case "dash replace dont" 'int a = foo;\n' -dont -replace foo with X
+    run_cmd_case "dash replace dont semiverbose" 'int a = foo;\n' -dont -semiverbose -replace foo with X
+
+    echo "== cmd: error and warning operands =="
+    run_cmd_case "error unquoted message" 'foo\n' -verbose replace foo with X error boom
+    run_cmd_case "warning unquoted message" 'foo\n' -verbose replace foo with X warning warn
+    run_cmd_case "error and warning" 'foo\n' -verbose replace foo with X error boom warning warn
+    run_cmd_case "error on dash replace" 'foo\n' -verbose -replace foo with X error boom
+    run_cmd_case "error replacemethod" '[obj pq:1]\n' -verbose -replacemethod pq: with rpq: error boom
 }
 
 run_tty() {
@@ -381,9 +506,9 @@ run_tty() {
 
 case "${1:---non-tty}" in
     --tty) run_tty ;;
-    --all) run_non_tty; run_script; run_tty ;;
-    --script) run_script ;;
-    *) run_non_tty; run_script ;;
+    --all) run_non_tty; run_script; run_cmd; run_tty ;;
+    --script) run_script; run_cmd ;;
+    *) run_non_tty; run_script; run_cmd ;;
 esac
 
 echo

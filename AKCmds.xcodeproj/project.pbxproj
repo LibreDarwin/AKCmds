@@ -108,7 +108,8 @@
 
 		A2B00001000000000000001 /* textutil */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = textutil; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3B00001000000000000009 /* textutil.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = textutil.h; sourceTree = "<group>"; };
-		A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = format.c; sourceTree = "<group>"; };
+		A3B0000100000000000000A /* font.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = font.c; sourceTree = "<group>"; };
+A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = format.c; sourceTree = "<group>"; };
 		A3B00001000000000000001 /* html.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = html.c; sourceTree = "<group>"; };
 		A3B00001000000000000002 /* info.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = info.c; sourceTree = "<group>"; };
 		A3B00001000000000000003 /* io.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = io.c; sourceTree = "<group>"; };
@@ -288,6 +289,7 @@
 			isa = PBXGroup;
 			children = (
 				A3B00001000000000000000 /* format.c */,
+		A3B0000100000000000000A /* font.c */,
 				A3B00001000000000000001 /* html.c */,
 				A3B00001000000000000002 /* info.c */,
 				A3B00001000000000000003 /* io.c */,
@@ -505,7 +507,8 @@
 		};
 /* End PBXShellScriptBuildPhase section */
 
-		A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000000 /* format.c */; };
+		A1B0000100000000000000A /* font.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B0000100000000000000A /* font.c */; };
+A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000000 /* format.c */; };
 		A1B00001000000000000001 /* html.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000001 /* html.c */; };
 		A1B00001000000000000002 /* info.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000002 /* info.c */; };
 		A1B00001000000000000003 /* io.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000003 /* io.c */; };
@@ -519,6 +522,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1B00001000000000000000 /* format.c in Sources */,
+				A1B0000100000000000000A /* font.c in Sources */,
 				A1B00001000000000000001 /* html.c in Sources */,
 				A1B00001000000000000002 /* info.c in Sources */,
 				A1B00001000000000000003 /* io.c in Sources */,

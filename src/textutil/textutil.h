@@ -89,6 +89,19 @@ typedef struct {
 	int fontsize;			/* points, or 0 for the default */
 } tu_style_t;
 
+/* Everything a writer needs of the face a -font name resolves to.  family is
+ * the RTF family keyword and postscript the RTF font name; wml is the family
+ * wordml writes, which is a third string again: it is the family the face
+ * belongs to, so "Arial Bold" is Arial and "Avenir" is Avenir Light.  See
+ * src/textutil/font.c, which is where the sampled database lives. */
+typedef struct {
+	const char *family;
+	const char *postscript;
+	const char *wml;
+	int italic;
+	int bold;
+} tu_font_t;
+
 /* The document metadata the -keywords, -title, -author, -subject, -comment,
  * -editor, -company, -creationtime and -modificationtime options set.  A null
  * member was never given and is left out of the output entirely, which is
@@ -202,6 +215,10 @@ int tu_write_rtfd(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);
 int tu_write_html(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta, tu_encoding_t enc);
+
+/* The -font database, shared by the writers that resolve one.  See
+ * src/textutil/font.c. */
+void tu_font_face(const char *want, tu_font_t *f);
 
 /* -info.  forced_fmt is the -format argument, or -1 when none was given. */
 int tu_info_file(const char *path, int forced_fmt);

@@ -28,141 +28,6 @@
 
 #include "textutil.h"
 
-/* The reference tool resolves -font through a font database, taking the family
- * a face belongs to and the PostScript name to write for it, and that database
- * holds every font installed on the machine, so it cannot be reproduced from
- * black-box probing.  What can be reproduced is the shape of the lookup:
- *
- *   - a name is matched against the families installed, without regard to case,
- *     so "courier" and "COURIER" are the same font;
- *   - some names are aliases, and an alias is matched only as it is spelled, so
- *     "Helvetica-Light" is a font but "helvetica-light" is not;
- *   - the PostScript name is an *output*, never an input, so "ArialMT" and
- *     "CourierNewPSMT" are not fonts to it;
- *   - a face that is bold or italic also sets a run attribute, and the two are
- *     written separately from the font name, italic first;
- *   - a name that resolves to nothing is not an error but is not the default
- *     either: it writes the swiss family under plain "Helvetica", where no
- *     -font at all writes "Helvetica-Light".
- *
- * The two tables below are the part of that database that was sampled, chosen
- * to cover the faces a document is likely to name.  See the last item under
- * Divergences in src/textutil/NOTES.md for what happens outside them. */
-static const struct {
-	const char *name;
-	const char *family;
-	const char *postscript;
-	int italic;
-	int bold;
-} font_families[] = {
-	{ "Helvetica",		"\\fswiss",	"Helvetica-Light",	0, 0 },
-	{ "Arial",		"\\fswiss",	"ArialMT",		0, 0 },
-	{ "Arial Bold",		"\\fswiss",	"Arial-BoldMT",		0, 1 },
-	{ "Arial Bold Italic",	"\\fswiss",	"Arial-BoldItalicMT",	1, 1 },
-	{ "Arial Unicode MS",	"\\fswiss",	"ArialUnicodeMS",	0, 0 },
-	{ "Optima",		"\\fswiss",	"Optima-Regular",	0, 0 },
-	{ "Times",		"\\froman",	"Times-Roman",		0, 0 },
-	{ "Times New Roman",	"\\froman",	"TimesNewRomanPSMT",	0, 0 },
-	{ "Palatino",		"\\froman",	"Palatino-Roman",	0, 0 },
-	{ "Palatino Bold",	"\\froman",	"Palatino-Bold",	0, 1 },
-	{ "Palatino Italic",	"\\froman",	"Palatino-Italic",	1, 0 },
-	{ "Courier",		"\\fmodern",	"Courier",		0, 0 },
-	{ "Courier New",	"\\fmodern",	"CourierNewPSMT",	0, 0 },
-	{ "Monaco",		"\\fnil",	"Monaco",		0, 0 },
-	{ "Menlo",		"\\fnil",	"Menlo-Regular",	0, 0 },
-	{ "Andale Mono",	"\\fnil",	"AndaleMono",		0, 0 },
-	{ "Verdana",		"\\fnil",	"Verdana",		0, 0 },
-	{ "Geneva",		"\\fnil",	"Geneva",		0, 0 },
-	{ "Zapfino",		"\\fnil",	"Zapfino",		0, 0 },
-	{ "Apple Chancery",	"\\fnil",	"Apple-Chancery",	0, 0 },
-	{ "Baskerville",	"\\fnil",	"Baskerville",		0, 0 },
-	{ "American Typewriter","\\fnil",	"AmericanTypewriter-Light", 0, 0 },
-	{ "Charter",		"\\fnil",	"Charter-Roman",	0, 0 },
-	{ "Cochin",		"\\fnil",	"Cochin",		0, 0 },
-	{ "Didot",		"\\fnil",	"Didot",		0, 0 },
-	{ "Futura",		"\\fnil",	"Futura-Medium",	0, 0 },
-	{ "Avenir",		"\\fnil",	"Avenir-Light",		0, 0 },
-	{ "Avenir Next",	"\\fnil",	"AvenirNext-UltraLight", 0, 0 },
-	{ "Gill Sans",		"\\fnil",	"GillSans-Light",	0, 0 },
-	{ "Savoye LET",		"\\fnil",	"SavoyeLetPlain",	0, 0 }
-};
-
-/* Aliases, matched as spelled.  Several carry no weight the family table does
- * not already give, and exist here because the reference tool accepts them. */
-static const struct {
-	const char *name;
-	const char *family;
-	const char *postscript;
-	int italic;
-	int bold;
-} font_aliases[] = {
-	{ "Helvetica-Light",	"\\fswiss",	"Helvetica-Light",	0, 0 },
-	{ "Helvetica Bold",	"\\fswiss",	"Helvetica-Bold",	0, 1 },
-	{ "Helvetica Oblique",	"\\fswiss",	"Helvetica-Oblique",	1, 0 },
-	{ "Helvetica Bold Oblique", "\\fswiss",	"Helvetica-BoldOblique", 1, 1 },
-	{ "Palatino-Roman",	"\\froman",	"Palatino-Roman",	0, 0 },
-	{ "Palatino-Bold",	"\\froman",	"Palatino-Bold",	0, 1 }
-};
-
-#define	DEFAULT_FONT	"Helvetica-Light"
-#define	DEFAULT_FAMILY	"\\fswiss"
-#define	DEFAULT_POINTS	12
-/* What a name that resolves to no font at all writes, which is a different
- * string from the default: a face was asked for and none was found, so the
- * PostScript name falls back to plain Helvetica rather than to the default's
- * Helvetica-Light. */
-#define	UNKNOWN_FONT	"Helvetica"
-
-static int
-ci_equal(const char *a, const char *b)
-{
-	while (*a != '\0' && *b != '\0') {
-		int ca = (unsigned char)*a++, cb = (unsigned char)*b++;
-
-		if (ca >= 'A' && ca <= 'Z')
-			ca += 'a' - 'A';
-		if (cb >= 'A' && cb <= 'Z')
-			cb += 'a' - 'A';
-		if (ca != cb)
-			return 0;
-	}
-	return *a == *b;
-}
-
-/* Resolve a -font argument to the family prefix, the PostScript name to write,
- * and the two run attributes a face may carry.  A name that matches nothing
- * keeps the default family and loses the default name: see UNKNOWN_FONT. */
-static void
-font_for(const char *want, const char **family, const char **psname,
-    int *italic, int *bold)
-{
-	*family = DEFAULT_FAMILY;
-	*psname = DEFAULT_FONT;
-	*italic = 0;
-	*bold = 0;
-	if (want == NULL)
-		return;
-	for (size_t i = 0; i < sizeof(font_families) / sizeof(font_families[0]); i++)
-		if (ci_equal(want, font_families[i].name)) {
-			*family = font_families[i].family;
-			*psname = font_families[i].postscript;
-			*italic = font_families[i].italic;
-			*bold = font_families[i].bold;
-			return;
-		}
-	for (size_t i = 0; i < sizeof(font_aliases) / sizeof(font_aliases[0]); i++)
-		if (strcmp(want, font_aliases[i].name) == 0) {
-			*family = font_aliases[i].family;
-			*psname = font_aliases[i].postscript;
-			*italic = font_aliases[i].italic;
-			*bold = font_aliases[i].bold;
-			return;
-		}
-	*psname = UNKNOWN_FONT;
-}
-
-/* Everything up to the font table, which is where an empty document and a
- * document with text in it begin to differ. */
 static const char envelope_pre[] =
     "{\\rtf1\\ansi\\ansicpg1252\\cocoartf2870\n"
     "\\cocoatextscaling0\\cocoaplatform0{\\fonttbl";
@@ -423,11 +288,10 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	int empty = d->nchars == 0;
 	const unsigned char *p = (const unsigned char *)d->text;
 	size_t i = 0;
-	const char *family, *psname;
-	int italic, bold;
-	int points = DEFAULT_POINTS;
+	tu_font_t face;
+	int points = 12;
 
-	font_for(st != NULL ? st->font : NULL, &family, &psname, &italic, &bold);
+	tu_font_face(st != NULL ? st->font : NULL, &face);
 	if (st != NULL && st->fontsize > 0)
 		points = st->fontsize;
 
@@ -438,9 +302,9 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		sink_str(&s, "}");
 	} else {
 		sink_put(&s, "\\f0", 3);
-		sink_str(&s, family);
+		sink_str(&s, face.family);
 		sink_str(&s, "\\fcharset0 ");
-		sink_str(&s, psname);
+		sink_str(&s, face.postscript);
 		sink_str(&s, ";}");
 	}
 	sink_str(&s, envelope_post);
@@ -454,9 +318,9 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		sink_str(&s, "\\f0");
 		/* A bold or italic face sets a run attribute, and where both are
 		 * set the oblique one comes first. */
-		if (italic)
+		if (face.italic)
 			sink_str(&s, "\\i");
-		if (bold)
+		if (face.bold)
 			sink_str(&s, "\\b");
 		sink_str(&s, "\\fs");
 		{

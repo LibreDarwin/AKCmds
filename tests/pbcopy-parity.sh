@@ -11,6 +11,22 @@
 # Pasteboard state is shared process-wide, so cases run sequentially and each
 # one rewrites what it reads.
 #
+# SCOPE.  15 cases, all on the ruler, find and font pasteboards.  The general
+# pasteboard is the tool's default and cannot be made private, so the main
+# copy/paste path is not covered here and cannot be, without overwriting
+# whatever the developer has on their clipboard.  The guard enforces that in
+# two passes: it refuses any argument that is literally `general`, and it
+# refuses a -pboard whose value is not ruler/find/font, since such a value is
+# either rejected or silently falls through to general.  Exit 3 means the
+# guard fired, which is a harness bug rather than a parity failure.
+#
+# The summary line always reports SKIP=0: nothing in the suite skips, and a
+# case that cannot run safely is meant to be left out of the suite rather
+# than counted as skipped.
+#
+# MY names the pbcopy binary only; pbpaste is read from the same directory
+# under its own name, so both sides of every round are the same build.
+#
 #   bash tests/pbcopy-parity.sh                 # against the release build
 #   MY=build/debug/pbcopy bash tests/pbcopy-parity.sh
 

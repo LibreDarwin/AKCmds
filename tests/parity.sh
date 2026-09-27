@@ -3,10 +3,26 @@
 # Compares stdout+stderr combined, exit status, and the state of every input
 # file, for every case. Self-contained: no state outside its temp directory.
 #
-#   ./tests/parity.sh            # default: 108 non-TTY cases
-#   ./tests/parity.sh --script   # script cases only
-#   ./tests/parity.sh --tty      # 17 TTY cases under `script`
-#   ./tests/parity.sh --all      # both
+#   ./tests/parity.sh            # default: 167 non-TTY cases
+#   ./tests/parity.sh --script   # the 103 -scriptfile cases on their own
+#   ./tests/parity.sh --tty      # the 17 TTY cases under `script`
+#   ./tests/parity.sh --all      # both, i.e. all 184
+#
+# SCOPE.  167 + 17 = 184 is the whole suite, so --all is the number to quote.
+# --script and --cmd are subsets of the default run, split out for iteration
+# rather than added to it; --all is default plus --tty.
+#
+# The default run gives both tools stdout on /dev/null, so nothing is a TTY.
+# The 17 TTY cases instead run under `script -q /dev/null` to hand each side a
+# pty, which is what exposes the row-by-row report, its placement, and the
+# eager close; they need BSD script(1) and are the only part of the suite that
+# is TTY-shaped.
+#
+# The find/replace/where/within/same rule surface is only reachable through
+# -scriptfile, so those cases live in run_script_case rather than
+# run_file_case; the leading-dash rule keywords and the re-quoting of argv
+# operands are only reachable from the command line, so those live in
+# run_cmd_case. Each runner is commented where it is defined.
 #
 # Also reachable as `make parity` / `make test` and as the xcodeproj's
 # `tops-parity` target, so keep this file tracked: the build depends on it.

@@ -2,6 +2,21 @@
 #
 # open parity: /usr/bin/open vs the locally built open, byte for byte.
 #
+# SCOPE.  62 cases.  Every case is one that both tools reject, or that resolves
+# to a plain file, before LaunchServices is asked to launch anything.  That is
+# the whole point of the restriction, and it is the limit worth stating
+# plainly: agreement here is agreement about argument handling, diagnostics
+# and exit status.  It is not evidence that either binary launches an
+# application correctly, and no case here would notice if it did not.
+#
+# Two consequences follow, and both are deliberate.  A scheme some installed
+# application claims, such as mailto:, is absent from the suite, because the
+# lookup succeeds and something real starts.  A recognised --arch is never
+# paired with a satisfiable file and application, because that is precisely
+# the point where a launch happens; the accepted spellings are left alone and
+# the ordering is pinned from both sides instead.  See the comments at those
+# cases.
+#
 # Only non-launching invocations are exercised.  Anything that would actually
 # start an application is left out on purpose: the point of this harness is to
 # compare argument handling, diagnostics and exit status, not to disturb the

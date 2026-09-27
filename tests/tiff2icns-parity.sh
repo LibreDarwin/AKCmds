@@ -7,6 +7,16 @@
 #   ./tests/tiff2icns-parity.sh
 #   make tiff2icns-parity
 #
+# SCOPE.  65 cases.  Every case builds its own fixtures with the inline
+# mktiff below, so nothing in the tree has to stay in sync with the tool, and
+# the two sides always see byte-identical inputs.  Sources are multi-page,
+# uncompressed, single-strip TIFFs whose pages differ in size, because the
+# representation the tool picks for a page is only observable if the pages are
+# not interchangeable.  The suite is about representation selection and the
+# 16/32/48/128/256/512 icon sizes, not about TIFF decoding: compressed,
+# tiled, strip-multi, 16-bit and palette/CMYK sources are not exercised, so
+# agreement here says nothing about how either side reads them.
+#
 # MY defaults to the Makefile release binary; override with MY=... .  A relative
 # MY is resolved against the project root, so the Makefile can pass a short path
 # (neither make variant allows $(shell)/$(CURDIR)).  ORACLE can be overridden to

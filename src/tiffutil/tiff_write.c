@@ -56,9 +56,16 @@ typedef struct {
 	uint32_t width, height;
 	uint32_t bps, spp;
 	uint32_t photometric;
+	uint32_t outphoto;           /* the photometric the rewrite carries */
 	uint32_t rows_per_strip;
+	uint32_t xres, yres;
 	const unsigned char *strip;
 	size_t striplen;
+	const unsigned char *cmap;
+	uint32_t cmapcount;
+	const char *desc;
+	const char *software;
+	uint16_t xalpha;
 } wimg_t;
 
 static size_t
@@ -91,26 +98,42 @@ be32(unsigned char *p, uint32_t v)
 
 /*
  * Serialise one directory.  The strip is already encoded and already
- * big-endian, so nothing here transforms samples.
+ * big-endian, so nothing here transforms samples.  Offsets are absolute, so
+ * the caller can append a chain of directories.  first says whether this is
+ * the head of the file, in which case the 8-byte header is emitted here.  The
+ * directory's own offset and the file position of its next-pointer field come
+ * back so the caller can link this directory to the next one.
  */
 static int
 write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
-    const unsigned char *icc, size_t icclen)
+    const unsigned char *icc, size_t icclen, int first, uint32_t *ifd_off_out,
+    size_t *ifd_pos_out)
 {
 	unsigned char bps_ext[MAX_SPP * 2];
 	unsigned char fmt_ext[MAX_SPP * 2];
 	unsigned char xr[8], yr[8], xs_ext[MAX_SPP * 2];
 	wfield_t f[32];
 	int placed[32], extseq[32], next_;
+	unsigned char extpad[32];
 	int nf = 0, n = 0;
 	size_t pad;
-	uint32_t ifd_off, xres_num = 72, yres_num = 72, ncolor = 0;
+	uint32_t ifd_off, ncolor = 0;
 	size_t ext_base, cur;
+	uint32_t strip_abs;
 
-	/* Reuse the input resolution's numerator when it is one we can carry;
-	 * the reference tool keeps 72/1 for the fixtures observed so far. */
-	be32(xr, xres_num); be32(xr + 4, 1);
-	be32(yr, yres_num); be32(yr + 4, 1);
+	/* Where this directory's strip is about to land.  The header is only
+	 * half written at this point, so account for its second word. */
+	if (first && buf_u16(out, 0x4d4d) < 0)
+		return -1;
+	if (first && buf_u16(out, 42) < 0)
+		return -1;
+	strip_abs = (uint32_t)out->len + (first ? 4u : 0u);
+
+	/* The directory's own resolution is carried into the output, written as
+	 * a whole number over one.  A zero here is a real value, not a missing
+	 * one: load_image has already substituted the default where needed. */
+	be32(xr, im->xres); be32(xr + 4, 1);
+	be32(yr, im->yres); be32(yr + 4, 1);
 	ncolor = tiff_color_channels(im->photometric);
 
 	for (uint32_t i = 0; i < im->spp && i < MAX_SPP; i++)
@@ -124,9 +147,13 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	f[nf++] = (wfield_t){TAG_BITSPERSAMPLE, 3, im->spp, 0,
 	    bps_ext, (size_t)im->spp * 2};
 	f[nf++] = (wfield_t){TAG_COMPRESSION, 3, 1, (uint32_t)compression, NULL, 0};
-	f[nf++] = (wfield_t){TAG_PHOTOMETRIC, 3, 1, im->photometric, NULL, 0};
+	f[nf++] = (wfield_t){TAG_PHOTOMETRIC, 3, 1, im->outphoto, NULL, 0};
 	f[nf++] = (wfield_t){TAG_FILLORDER, 3, 1, 1, NULL, 0};
-	f[nf++] = (wfield_t){TAG_STRIPOFFSETS, 4, 1, 8, NULL, 0};
+	if (im->desc != NULL)
+		f[nf++] = (wfield_t){TAG_IMAGEDESCRIPTION, 2,
+		    (uint32_t)strlen(im->desc) + 1, 0,
+		    (const unsigned char *)im->desc, strlen(im->desc) + 1};
+	f[nf++] = (wfield_t){TAG_STRIPOFFSETS, 4, 1, strip_abs, NULL, 0};
 	f[nf++] = (wfield_t){TAG_ORIENTATION, 3, 1, 1, NULL, 0};
 	f[nf++] = (wfield_t){TAG_SAMPLESPERPIXEL, 3, 1, im->spp, NULL, 0};
 	/* The reference tool never splits its output into more than one strip,
@@ -138,19 +165,27 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	f[nf++] = (wfield_t){TAG_YRESOLUTION, 5, 1, 0, yr, 8};
 	f[nf++] = (wfield_t){TAG_PLANARCONFIG, 3, 1, 1, NULL, 0};
 	f[nf++] = (wfield_t){TAG_RESOLUTIONUNIT, 3, 1, 2, NULL, 0};
+	if (im->software != NULL)
+		f[nf++] = (wfield_t){TAG_SOFTWARE, 2,
+		    (uint32_t)strlen(im->software) + 1, 0,
+		    (const unsigned char *)im->software, strlen(im->software) + 1};
 	/* 317 sorts before 338, so the predictor is queued ahead of the
 	 * extra samples. It is emitted for every predicted file, not only
 	 * the ones that also carry extra samples. */
 	if (predictor == 2)
 		f[nf++] = (wfield_t){TAG_PREDICTOR, 3, 1, 2, NULL, 0};
+	/* A palette is carried through untouched: the reference tool copies
+	 * the source's colour map rather than synthesising one. */
+	if (im->cmap != NULL && im->cmapcount > 0)
+		f[nf++] = (wfield_t){TAG_COLORMAP, 3, im->cmapcount, 0,
+		    im->cmap, (size_t)im->cmapcount * 2};
+	/* One extra channel, carrying the source's own association value or
+	 * unassociated alpha when the input did not say.  320 sorts ahead of
+	 * 338, so a palette entry is queued before this one. */
 	if (ncolor && im->spp > ncolor) {
-		/* More samples than the photometric implies, so the surplus are
-		 * extra channels.  The reference tool derives them itself when the
-		 * input does not say, and treats them as unassociated alpha. */
-		for (uint32_t i = 0; i < im->spp - ncolor && i < MAX_SPP; i++)
-			be16(xs_ext + 2 * i, 2);
-		f[nf++] = (wfield_t){TAG_EXTRASAMPLES, 3, im->spp - ncolor, 0,
-		    xs_ext, (size_t)(im->spp - ncolor) * 2};
+		be16(xs_ext, im->xalpha);
+		f[nf++] = (wfield_t){TAG_EXTRASAMPLES, 3, 1, 0,
+		    xs_ext, 2};
 	}
 	f[nf++] = (wfield_t){TAG_SAMPLEFORMAT, 3, im->spp, 0,
 	    fmt_ext, (size_t)im->spp * 2};
@@ -168,15 +203,19 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	 * begin at the same relative place in every output. */
 	{
 		static const uint16_t ext_order[] = {
-			TAG_XRESOLUTION, TAG_YRESOLUTION, TAG_BITSPERSAMPLE,
-			TAG_SAMPLEFORMAT, TAG_EXTRASAMPLES, TAG_ICCPROFILE
+			TAG_XRESOLUTION, TAG_YRESOLUTION,
+			TAG_BITSPERSAMPLE, TAG_SAMPLEFORMAT,
+			TAG_COLORMAP, TAG_EXTRASAMPLES,
+			TAG_IMAGEDESCRIPTION, TAG_SOFTWARE,
+			TAG_ICCPROFILE
 		};
 
 		/* The directory starts on an even offset, so an odd-length strip
-		 * is followed by a pad byte. */
-		pad = (8 + im->striplen) & 1;
-		ifd_off = (uint32_t)(8 + im->striplen + pad);
-		ext_base = 8 + im->striplen + pad + 2 + (size_t)12 * nf + 4;
+		 * is followed by a pad byte.  The head's strip sits straight after
+		 * the 8-byte header, a later one wherever the caller has got to. */
+		pad = (strip_abs + im->striplen) & 1;
+		ifd_off = strip_abs + im->striplen + pad;
+		ext_base = strip_abs + im->striplen + pad + 2 + (size_t)12 * nf + 4;
 		cur = ext_base;
 		for (size_t k = 0; k < sizeof(ext_order) / sizeof(ext_order[0]); k++) {
 			for (int i = 0; i < nf; i++) {
@@ -201,6 +240,15 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 					placed[i] = 1;
 					break;
 				}
+				/* Every out-of-line block begins on an even
+				 * offset, so an odd-length one is followed
+				 * by a pad byte. */
+				if (cur & 1) {
+					cur++;
+					extpad[next_] = 1;
+				} else {
+					extpad[next_] = 0;
+				}
 				f[i].inl = (uint32_t)cur;
 				cur += f[i].extlen;
 				placed[i] = 1;
@@ -216,13 +264,13 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 	}
 	n = nf;
 
-	if (buf_u16(out, 0x4d4d) < 0 || buf_u16(out, 42) < 0 ||
-	    buf_u32(out, ifd_off) < 0)
+	if (first && buf_u32(out, ifd_off) < 0)
 		return -1;
 	if (buf_put(out, im->strip, im->striplen) < 0)
 		return -1;
 	if (pad && buf_u8(out, 0) < 0)
 		return -1;
+	*ifd_off_out = ifd_off;
 	if (buf_u16(out, (unsigned)n) < 0)
 		return -1;
 	for (int i = 0; i < n; i++) {
@@ -234,10 +282,13 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 		if (buf_put(out, slot, 4) < 0)
 			return -1;
 	}
+	*ifd_pos_out = out->len;      /* where the next-pointer field begins */
 	if (buf_u32(out, 0) < 0)
 		return -1;
 	for (int k = 0; k < next_; k++) {
 		int i = extseq[k];
+		if (extpad[k] && buf_u8(out, 0) < 0)
+			return -1;
 		if (buf_put(out, f[i].ext, f[i].extlen) < 0)
 			return -1;
 	}
@@ -252,7 +303,7 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
  */
 int
 tiff_build_strip(const unsigned char *src, size_t srclen, uint32_t bps,
-    uint32_t spp, uint32_t width, uint32_t height, int predictor,
+    uint32_t spp, uint32_t width, int predictor,
     int swap, unsigned char **out, size_t *outlen)
 {
 	unsigned char *o = malloc(srclen ? srclen : 1);
@@ -295,28 +346,57 @@ tiff_build_strip(const unsigned char *src, size_t srclen, uint32_t bps,
 }
 
 int
-tiff_write_image(const char *path, const tuimg_t *im, const unsigned char *strip,
-    size_t striplen, int compression, int predictor)
+tiff_write_images(const char *path, const tuwrite_t *items, int n)
 {
 	buf_t out = {NULL, 0, 0};
-	wimg_t m;
-	const unsigned char *icc = NULL;
-	size_t icclen = 0;
 	FILE *f;
-	int rc = 0;
+	int rc = 0, nwritten = 0;
+	size_t prev_next_pos = 0;
 
-	tiff_icc_for((int)im->photometric, &icc, &icclen);
-	m.width = im->width;
-	m.height = im->height;
-	m.bps = im->bps;
-	m.spp = im->spp;
-	m.photometric = im->photometric;
-	m.rows_per_strip = im->rows_per_strip;
-	m.strip = strip;
-	m.striplen = striplen;
-	if (write_dir(&out, &m, compression, predictor, icc, icclen) < 0) {
-		buf_free(&out);
-		return -1;
+	for (int i = 0; i < n; i++) {
+		wimg_t m;
+		unsigned char labscratch[496];
+		const unsigned char *icc = NULL;
+		size_t icclen = 0, ifd_pos = 0;
+		uint32_t ifd_off = 0;
+
+		/* A directory the reference tool could not make an image out of
+		 * is dropped, leaving an empty file when it was the only one,
+		 * and the run is still called a success. */
+		if (items[i].im.unusable)
+			continue;
+
+		tiff_icc_for((int)items[i].im.outphoto, labscratch,
+		    sizeof(labscratch), &icc, &icclen);
+		m.width = items[i].im.width;
+		m.height = items[i].im.height;
+		m.bps = items[i].im.outbps != 0 ? items[i].im.outbps :
+		    items[i].im.bps;
+		m.spp = items[i].im.spp;
+		m.photometric = items[i].im.outphoto;
+		m.outphoto = items[i].im.outphoto;
+		m.rows_per_strip = items[i].im.rows_per_strip;
+		m.xres = items[i].im.xres;
+		m.yres = items[i].im.yres;
+		m.cmap = items[i].im.cmap;
+		m.cmapcount = items[i].im.cmapcount;
+		m.strip = items[i].strip;
+		m.striplen = items[i].striplen;
+		m.desc = items[i].desc;
+		m.software = items[i].software;
+		m.xalpha = items[i].im.xalpha;
+		if (write_dir(&out, &m, items[i].compression, items[i].predictor,
+		    icc, icclen, nwritten == 0, &ifd_off, &ifd_pos) < 0) {
+			buf_free(&out);
+			return -1;
+		}
+		/* Point the previous directory at this one, now that this one's
+		 * offset is known.  The last directory keeps the zero that
+		 * write_dir already emitted for it. */
+		if (nwritten > 0 && prev_next_pos != 0)
+			be32(out.p + prev_next_pos, ifd_off);
+		prev_next_pos = ifd_pos;
+		nwritten++;
 	}
 	f = fopen(path, "wb");
 	if (f == NULL) {
@@ -332,14 +412,62 @@ tiff_write_image(const char *path, const tuimg_t *im, const unsigned char *strip
 	return rc;
 }
 
+int
+tiff_write_image(const char *path, const tuimg_t *im, const unsigned char *strip,
+    size_t striplen, int compression, int predictor)
+{
+	tuwrite_t one;
+
+	one.im = *im;
+	one.strip = strip;
+	one.striplen = striplen;
+	one.compression = compression;
+	one.predictor = predictor;
+	one.desc = NULL;
+	one.software = NULL;
+	return tiff_write_images(path, &one, 1);
+}
+
 uint32_t
+tiff_out_photometric(uint32_t photo, uint32_t spp, uint32_t bps)
+{
+	/* A single bit of gray is the one depth that keeps its own name on the
+	 * way out, because the reference repacks it and hands it to the bilevel
+	 * compressor rather than widening it like everything else. */
+	if (bps == 1 && (photo == 0 || photo == 1))
+		return 1;
+	/* Two of the rest turn on the pixel rather than the space.  WhiteIsZero
+	 * survives only for a single sample: with more than one the reference
+	 * calls the result BlackIsZero, and LogL is gray for one sample and RGB
+	 * for three or four. */
+	if (photo == 0)
+		return spp == 1 ? 0 : 1;
+	if (photo == 6 || photo == 32845)
+		return 2;
+	/* All three CIE Lab encodings are laid down as plain Lab. */
+	if (photo == 9 || photo == 10)
+		return 8;
+	if (photo == 32844)
+		return spp == 1 ? 1 : 2;
+	/* A palette keeps its own name as well as its colour map, because the
+	 * samples are indices and stay that way. */
+	return photo;
+}
+
+int
 tiff_color_channels(uint32_t photometric)
 {
 	switch (photometric) {
 	case 0: case 1:            return 1;   /* black/white is zero */
 	case 2: case 6:            return 3;   /* RGB, YCbCr */
+	case 3:                   return 1;   /* palette: the samples are indices */
 	case 5:                    return 4;   /* CMYK */
-	default:                   return 0;
+	case 8: case 9: case 10:   return 3;   /* the three CIE Lab encodings */
+	case 32844:               return 3;   /* LogL: one sample is gray, three are
+	                                        * read as colour, as many as four
+	                                        * keep a spare channel */
+	case 32845:               return 3;   /* LogLuv */
+	default:                   return 0;   /* a mask, or nothing recognised */
 	}
 }
 
@@ -350,12 +478,53 @@ tiff_predictor_for(int compression, uint32_t bps)
 	return compression == COMP_LZW && bps == 8 ? 2 : 1;
 }
 
+/* The Lab profile is rebuilt per image and carries the moment it was made, so
+ * the template's zeroed date field is filled in here.  The ICC header spells
+ * the date out as six 16-bit big-endian numbers: year, month, day, hour,
+ * minute, second.  The profile is written as UTC, as the specification says,
+ * which cannot be checked against the reference on a host whose local time
+ * happens to be UTC; see NOTES.md. */
+static void
+tiff_stamp_lab(unsigned char *p)
+{
+	time_t now = time(NULL);
+	struct tm tm;
+	uint16_t v[6];
+	int i;
+
+	if (gmtime_r(&now, &tm) == NULL)
+		return;
+	v[0] = (uint16_t)tm.tm_year + 1900;
+	v[1] = (uint16_t)tm.tm_mon + 1;
+	v[2] = (uint16_t)tm.tm_mday;
+	v[3] = (uint16_t)tm.tm_hour;
+	v[4] = (uint16_t)tm.tm_min;
+	v[5] = (uint16_t)tm.tm_sec;
+	for (i = 0; i < 6; i++) {
+		p[24 + i * 2] = (unsigned char)(v[i] >> 8);
+		p[24 + i * 2 + 1] = (unsigned char)(v[i] & 0xff);
+	}
+}
+
 const unsigned char *
-tiff_icc_for(int photometric, const unsigned char **p, size_t *len)
+tiff_icc_for(int photometric, unsigned char *scratch, size_t scratchlen,
+             const unsigned char **p, size_t *len)
 {
 	if (photometric == 0 || photometric == 1) {
 		*p = iccProfileGray;
 		*len = sizeof(iccProfileGray);
+	} else if (photometric == 5) {
+		*p = iccProfileCMYK;
+		*len = sizeof(iccProfileCMYK);
+	} else if (photometric == 8) {
+		if (scratch != NULL && scratchlen == sizeof(iccProfileLab)) {
+			memcpy(scratch, iccProfileLab, sizeof(iccProfileLab));
+			tiff_stamp_lab(scratch);
+			*p = scratch;
+		} else {
+			*p = iccProfileLab;
+		}
+		*len = sizeof(iccProfileLab);
 	} else {
 		*p = iccProfileRGB;
 		*len = sizeof(iccProfileRGB);

@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
 #include <string.h>
 
 #include "tiffutil.h"
@@ -57,7 +58,7 @@ dump_tag_name(uint16_t tag)
 	case 297:                 return "PageName";
 	case 301:                 return "TransferFunction";
 	case 305:                 return "Software";
-	case 320:                 return "ColorMap";
+	case 320:                 return "Colormap";
 	case 33628:               return "CFAPattern";
 	default:                  return NULL;
 	}
@@ -73,29 +74,37 @@ photo_channels(uint32_t p)
 	case 1: return 1;		/* BlackIsZero */
 	case 2: return 3;		/* RGB */
 	case 3: return 1;		/* RGBPalette */
-	case 4: return 1;		/* TransparencyMask */
+	case 4: return 4;		/* TransparencyMask, as counted here */
 	case 5: return 4;		/* CMYK */
 	case 6: return 3;		/* YCbCr */
-	case 8: return 1;		/* CIELab */
-	default:  return 0;
+	case 8: return 3;		/* CIELab */
+	case 9: return 3;		/* ICCLab */
+	case 10: return 3;		/* ITULab */
+	case 32845: return 3;		/* LogLuv */
+	default:  return 0;		/* unaccounted for: no warning at all */
 	}
 }
 
-static const char *
-photometric_phrase(uint32_t p)
+/* The reference tool names only the five colour spaces it has words for, and
+ * even then separated keeps its number in front of the name.  Everything else
+ * falls back to the raw value in hex, so the long tail of registered
+ * photometrics is not spelled out at all. */
+static void
+photometric_phrase(uint32_t p, uint32_t spp, char *buf, size_t buflen)
 {
 	switch (p) {
-	case 0: return "\"min-is-white\"";
-	case 1: return "\"min-is-black\"";
-	case 2: return "RGB color";
-	case 3: return "palette color";
-	case 4: return "Transparency Mask";
-	case 5: return "CMYK color";
-	case 6: return "YCbCr color";
-	case 8: return "CIELab color";
-	case 9: return "ICCLab color";
-	case 10: return "ITULab color";
-	default: return tu_photometric_name(p);
+	case 0: snprintf(buf, buflen, "\"min-is-white\""); break;
+	case 1: snprintf(buf, buflen, "\"min-is-black\""); break;
+	case 2: snprintf(buf, buflen, "RGB color"); break;
+	case 3: snprintf(buf, buflen, "palette color (RGB from colormap)"); break;
+	case 4: snprintf(buf, buflen, "transparency mask"); break;
+	case 5:
+		if (spp == 2)
+			snprintf(buf, buflen, "%u (NeXT alpha, used in 1.0)", p);
+		else
+			snprintf(buf, buflen, "%u (CMYK color)", p);
+		break;
+	default: snprintf(buf, buflen, "%u (0x%x)", p, p); break;
 	}
 }
 
@@ -201,18 +210,25 @@ tu_cmd_info(const char *path, int verbose)
 	}
 	for (int d = 0; d < t.ndir; d++) {
 		uint32_t w = 0, h = 0, bps = 0, spp = 1, rps = 0, photo = 0;
+		uint32_t shown_rps = 0;
+		int resplit = 0;
 
 		{
 			uint32_t cspp = 0, ctype = 0;
 			int cxtype = 0;
-			uint32_t ccount = 0;
+			uint32_t ccount = 0, nchan;
 			tu_get_uint(&t, d, TAG_SAMPLESPERPIXEL, &cspp);
 			tu_get_uint(&t, d, TAG_PHOTOMETRIC, &ctype);
 			if (tu_tag_raw(&t, d, TAG_EXTRASAMPLES, &cxtype,
 			    &ccount) == NULL)
 				ccount = 0;
-			if (photo_channels(ctype) + ccount != cspp)
-				printf("TIFFReadDirectory: Warning, Sum of"
+			/* The sum is only ever short, never long, and a
+			 * photometric with no channel count is not checked.  This
+			 * one is a warning rather than part of the report, so it
+			 * goes to stderr and not into the listing. */
+			nchan = photo_channels(ctype);
+			if (nchan != 0 && nchan + ccount < cspp)
+				tu_warn("TIFFReadDirectory: Warning, Sum of"
 				    " Photometric type-related color channels"
 				    " and ExtraSamples doesn't match"
 				    " SamplesPerPixel. Defining non-color"
@@ -240,9 +256,15 @@ tu_cmd_info(const char *path, int verbose)
 		}
 		if (tu_get_uint(&t, d, TAG_COMPRESSION, &v) == 0)
 			printf("  Compression Scheme: %s\n", tu_compression_name(v));
-		if (tu_get_uint(&t, d, TAG_PHOTOMETRIC, &photo) == 0)
-			printf("  Photometric Interpretation: %s\n",
-			    photometric_phrase(photo));
+		tu_get_uint(&t, d, TAG_SAMPLESPERPIXEL, &spp);
+		if (tu_get_uint(&t, d, TAG_PHOTOMETRIC, &photo) == 0) {
+			char ph[64];
+
+			/* Separated at two samples is not four inks, it is the
+			 * grayscale and alpha pair NeXT shipped in 1.0. */
+			photometric_phrase(photo, spp, ph, sizeof(ph));
+			printf("  Photometric Interpretation: %s\n", ph);
+		}
 		if (tu_has_tag(&t, d, TAG_EXTRASAMPLES))
 			printf("  Alpha: Present\n");
 		if (tu_has_tag(&t, d, TAG_FILLORDER)) {
@@ -256,24 +278,80 @@ tu_cmd_info(const char *path, int verbose)
 			tu_get_uint(&t, d, TAG_ORIENTATION, &v);
 			printf("  Orientation: %s\n", orientation_phrase(v));
 		}
-		tu_get_uint(&t, d, TAG_SAMPLESPERPIXEL, &spp);
-		printf("  Samples/Pixel: %u\n", spp);
-		tu_get_uint(&t, d, TAG_ROWSPERSTRIP, &rps);
-		printf("  Rows/Strip: %u\n", rps);
-		if (rps)
-			printf("  Number of Strips: %u\n", (h + rps - 1) / rps);
+		printf("  Samples/Pixel: %u\n", spp);		tu_get_uint(&t, d, TAG_ROWSPERSTRIP, &rps);
+		{
+			/* A file stored as one strip is reported as the strips it
+			 * would be split into, at roughly 8K per strip.  A file
+			 * that already has several strips is reported as stored,
+			 * and a written file keeps the stored value. */
+			uint32_t shown = rps;
+
+			if (shown == 0 || shown >= h) {
+				uint32_t rb = w * ((bps + 7) / 8) * spp;
+
+				shown = rb == 0 ? 1 : 8192 / rb;
+				if (shown == 0)
+					shown = 1;
+				if (shown > h)
+					shown = h;
+			}
+			/* A genuine split only happens when the recomputed
+			 * value came out below the image height. */
+			resplit = (rps == 0 || rps >= h) && shown < h;
+			shown_rps = shown;
+			printf("  Rows/Strip: %u\n", shown);
+			if (shown)
+				printf("  Number of Strips: %u\n",
+				    (h + shown - 1) / shown);
+		}
 		if (verbose) {
-			uint32_t n = t.nstrips;
-			if (n > 0) {
+			uint32_t rowbytes = w * ((bps + 7) / 8) * spp;
+			uint32_t n = t.nstrips[d];
+
+			if (resplit && shown_rps > 0 && rowbytes > 0) {
+				/* Stored as one strip, so list the strips the
+				 * reported layout implies. */
+				uint32_t k = (h + shown_rps - 1) / shown_rps;
+
+				printf("  Strips (Offset, ByteCount):\n");
+				for (uint32_t i = 0; i < k; i++) {
+					uint32_t rows = h - i * shown_rps;
+
+					if (rows > shown_rps)
+						rows = shown_rps;
+					printf("     %u, %u\n",
+					    8 + i * shown_rps * rowbytes,
+					    rows * rowbytes);
+				}
+			} else if (n > 0) {
 				printf("  Strips (Offset, ByteCount):\n");
 				for (uint32_t i = 0; i < n; i++)
-					printf("     %u, %u\n", t.strips[i],
-					    t.stripbc[i]);
+					printf("     %u, %u\n", t.strips[d][i],
+					    t.stripbc[d][i]);
 			}
 		}
 		if (tu_get_uint(&t, d, TAG_PLANARCONFIG, &v) == 0)
 			printf("  Planar Configuration: %s\n",
 			    v == 2 ? "planar" : "Not planar");
+		if (tu_has_tag(&t, d, TAG_COLORMAP)) {
+			unsigned char *cm = NULL;
+			uint32_t cn = 0;
+
+			if (tu_get_bytes(&t, d, TAG_COLORMAP, &cm, &cn) == 0 &&
+			    cm != NULL) {
+				if (verbose) {
+					printf("  Color Map: \n");
+					for (uint32_t i = 0; i + 2 < cn; i += 3)
+						printf("    %u: %u %u %u\n", i / 3,
+						    rd_be16(cm + 2 * i, t.be),
+						    rd_be16(cm + 2 * i + 2, t.be),
+						    rd_be16(cm + 2 * i + 4, t.be));
+				} else {
+					printf("  Color Map: (present)\n");
+				}
+				free(cm);
+			}
+		}
 		if (tu_has_tag(&t, d, TAG_ICCPROFILE)) {
 			char name[256];
 			icc_profile_name(&t, d, name, sizeof(name));
@@ -292,8 +370,20 @@ tu_cmd_dump(const char *path)
 	uint32_t off;
 
 	if (tiff_open_file(&t, path) < 0) {
+		int rc, openerc = t.openerc;
+
 		tiff_close(&t);
-		return -1;
+		/* A file that could not be read is reported by name and still
+		 * exits 0. A file that was read but is not a TIFF is reported
+		 * against a null name -- the reference tool formats a path it
+		 * never got -- and does exit non-zero. */
+		if (openerc == TUFF_ENOENT) {
+			fprintf(stderr, "%s: %s\n", path, strerror(ENOENT));
+			return 0;
+		}
+		fprintf(stderr, "(null): Error while reading TIFF header.\n");
+		rc = 1;
+		return rc;
 	}
 	printf("Magic: 0x%02x%02x <%s-endian> Version: 0x%x <ClassicTIFF>\n",
 	    t.data[0], t.data[1], t.be ? "big" : "little",
@@ -304,6 +394,10 @@ tu_cmd_dump(const char *path)
 		uint16_t n = rd_be16(t.data + off, t.be);
 		uint32_t next = rd_be32(t.data + off + 2 + (size_t)n * 12, t.be);
 
+		/* Directories are separated by a blank line; the last one has
+		 * no trailing blank. */
+		if (d > 0)
+			printf("\n");
 		printf("Directory %d: offset %u (%#x) next %u (%#x)\n", d,
 		    off, off, next, next);
 		for (uint16_t i = 0; i < n; i++) {
@@ -338,9 +432,8 @@ tu_cmd_dump(const char *path)
 				/* Undefined bytes are shown in hex. The reference
 				 * tool prints a zero as "00" but every other
 				 * value with an 0x prefix and no padding, so 2
-				 * comes out "0x2" and 12 comes out "0xc". This
-				 * path also shows 24 values where the decimal
-				 * path shows 20. */
+				 * comes out "0x2" and 12 comes out "0xc".
+				 * Both paths preview 24 values. */
 				for (k = 0; k < cnt && k < 24; k++) {
 					unsigned int x = val ? val[k] : 0;
 					if (x == 0)
@@ -353,7 +446,7 @@ tu_cmd_dump(const char *path)
 			} else if (cnt == 1) {
 				printf("%u", shown);
 			} else {
-				for (k = 0; k < cnt && k < 20; k++) {
+				for (k = 0; k < cnt && k < 24; k++) {
 					const unsigned char *p = val ? val + k * esz : NULL;
 					uint32_t x = p == NULL ? 0
 					    : esz == 1 ? p[0]
@@ -361,7 +454,7 @@ tu_cmd_dump(const char *path)
 					    : rd_be32(p, t.be);
 					printf("%s%u", k ? " " : "", x);
 				}
-				if (cnt > 20)
+				if (cnt > 24)
 					printf(" ...");
 			}
 			printf(">");

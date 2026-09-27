@@ -40,7 +40,15 @@ TIFF2ICNS_OBJS := $(OBJDIR)/tiff2icns.o
 TOPS_BIN := $(BUILD_DIR)/tops
 TOPS_OBJS := $(OBJDIR)/tops.o
 
-all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN) $(TOPS_BIN)
+# tiffutil is plain C (no Cocoa): it links the same CFLAGS the rest of the
+# build uses for C, with no frameworks.
+TIFFUTIL_BIN := $(BUILD_DIR)/tiffutil
+TIFFUTIL_OBJS := $(OBJDIR)/buf.o $(OBJDIR)/cat.o $(OBJDIR)/compress.o \
+	$(OBJDIR)/g4.o $(OBJDIR)/tiff_decode.o $(OBJDIR)/tiff_read.o \
+	$(OBJDIR)/tiff_text.o $(OBJDIR)/tiff_write.o $(OBJDIR)/main.o
+
+all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN) $(TOPS_BIN) \
+	$(TIFFUTIL_BIN)
 
 $(PB_COPY): $(PB_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -81,6 +89,46 @@ $(TOPS_BIN): $(TOPS_OBJS)
 $(OBJDIR)/tops.o: src/tops/tops.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/tops/tops.m
+
+$(TIFFUTIL_BIN): $(TIFFUTIL_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $(TIFFUTIL_OBJS)
+
+$(OBJDIR)/buf.o: src/tiffutil/buf.c src/tiffutil/buf.h src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/buf.c
+
+$(OBJDIR)/cat.o: src/tiffutil/cat.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/cat.c
+
+$(OBJDIR)/compress.o: src/tiffutil/compress.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/compress.c
+
+$(OBJDIR)/g4.o: src/tiffutil/g4.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/g4.c
+
+$(OBJDIR)/tiff_decode.o: src/tiffutil/tiff_decode.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/tiff_decode.c
+
+$(OBJDIR)/tiff_read.o: src/tiffutil/tiff_read.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/tiff_read.c
+
+$(OBJDIR)/tiff_text.o: src/tiffutil/tiff_text.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/tiff_text.c
+
+$(OBJDIR)/tiff_write.o: src/tiffutil/tiff_write.c src/tiffutil/tiffutil.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/tiff_write.c
+
+$(OBJDIR)/main.o: src/tiffutil/main.c src/tiffutil/tiffutil.h src/tiffutil/buf.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/tiffutil/main.c
 
 # Byte-parity check against Apple's /usr/bin/tops, run by tests/parity.sh.
 # MY is passed as a relative path and resolved against the project root by the

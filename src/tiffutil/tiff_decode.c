@@ -213,7 +213,7 @@ tu_compression_name(uint32_t c)
 	case 1:     return "none";
 	case 2:     return "CCITT 1D";
 	case 3:     return "Group 3 Fax";
-	case 4:     return "Group 4 Fax";
+	case 4:     return "CCITT Group 4 facsimile encoding";
 	case 5:     return "Lempel-Ziv & Welch encoding";
 	case 6:     return "JPEG (old-style)";
 	case 7:     return "JPEG";
@@ -224,22 +224,3 @@ tu_compression_name(uint32_t c)
 	}
 }
 
-const char *
-tu_photometric_name(uint32_t p)
-{
-	switch (p) {
-	case 0:  return "WhiteIsZero";
-	case 1:  return "BlackIsZero";
-	case 2:  return "RGB";
-	case 3:  return "RGB Palette";
-	case 4:  return "Transparency Mask";
-	case 5:  return "CMYK";
-	case 6:  return "YCbCr";
-	case 8:  return "CIELab";
-	case 9:  return "ICCLab";
-	case 10: return "ITULab";
-	case 32844: return "LogL";
-	case 32845: return "LogLuv";
-	default: return "unknown";
-	}
-}

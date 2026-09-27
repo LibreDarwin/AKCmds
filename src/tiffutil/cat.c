@@ -62,6 +62,20 @@ is_offset_tag(uint16_t tag)
 	}
 }
 
+/* Size in bytes of one value of the given field type. */
+static uint32_t
+type_size(uint16_t type)
+{
+	switch (type) {
+	case 1: case 2: case 6: case 7:		return 1;
+	case 3: case 8:				return 2;
+	case 4: case 9: case 11: case 13:	return 4;
+	case 5: case 10: case 12: case 16:
+	case 17:				return 8;
+	default:				return 0;
+	}
+}
+
 /* Shift every offset in the file by delta, in place. */
 static void
 cat_shift(unsigned char *d, int be, uint32_t delta)
@@ -78,9 +92,16 @@ cat_shift(unsigned char *d, int be, uint32_t delta)
 				uint16_t tag = rd_be16(e, be);
 				uint16_t type = rd_be16(e + 2, be);
 				uint32_t cnt = rd_be32(e + 4, be);
-				if (cnt != 1 || !is_offset_tag(tag))
+				uint32_t sz = type_size(type);
+				if (!is_offset_tag(tag) || sz == 0)
 					continue;
-				if (type != 4 && type != 13)
+				/* A value that does not fit in the four byte
+				 * slot is stored out of line and the slot holds
+				 * the offset to it.  Testing the size rather
+				 * than the count matters: an ICC profile has
+				 * count 4508 but still keeps a single offset
+				 * in the slot. */
+				if (sz * cnt <= 4)
 					continue;
 				put32(e + 8, rd_be32(e + 8, be) + delta, be);
 			}

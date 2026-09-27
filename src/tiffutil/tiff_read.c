@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "tiffutil.h"
 #include "buf.h"
@@ -176,6 +177,26 @@ tu_get_uint(tiff_t *t, int dir, uint16_t tag, uint32_t *out)
 }
 
 int
+tu_get_rational(tiff_t *t, int dir, uint16_t tag, uint32_t *num,
+    uint32_t *den)
+{
+	int type;
+	uint32_t count;
+	unsigned char *raw = tu_tag_raw(t, dir, tag, &type, &count);
+
+	if (raw == NULL)
+		return -1;
+	if (type_size(type) == 8 && count >= 1) {
+		*num = rd_be32(raw, t->be);
+		*den = rd_be32(raw + 4, t->be);
+		free(raw);
+		return 0;
+	}
+	free(raw);
+	return -1;
+}
+
+int
 tu_has_tag(tiff_t *t, int dir, uint16_t tag)
 {
 	if (dir < 0 || dir >= t->ndir)
@@ -213,11 +234,15 @@ cmp_tag(const void *a, const void *b)
 void
 tiff_close(tiff_t *t)
 {
-	for (int d = 0; d < t->ndir; d++)
+	for (int d = 0; d < t->ndir; d++) {
 		free(t->ents[d]);
+		free(t->strips[d]);
+		free(t->stripbc[d]);
+	}
 	free(t->ents);
 	free(t->ndirs);
 	free(t->ifdoff);
+	free(t->nstrips);
 	free(t->strips);
 	free(t->stripbc);
 	free(t->data);
@@ -331,40 +356,43 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 		return -1;
 	}
 
-	/* Resolve the strip table once; -info and -verboseinfo both report it.
-	 * StripOffsets is SHORT for a single strip and LONG otherwise, so the
-	 * type has to come from the field rather than be assumed. */
-	t->nstrips = 0;
-	t->strips = NULL;
-	t->stripbc = NULL;
-	{
-		int d = 0, otype = 0, ctype = 0;
+	/* Resolve each directory's own strip table; -info and -verboseinfo both
+	 * report them, and a decode of directory N must not read directory 0's
+	 * offsets.  StripOffsets is SHORT for a single strip and LONG otherwise,
+	 * so the type has to come from the field rather than be assumed. */
+	t->nstrips = calloc((size_t)t->ndir, sizeof(uint32_t));
+	t->strips = calloc((size_t)t->ndir, sizeof(uint32_t *));
+	t->stripbc = calloc((size_t)t->ndir, sizeof(uint32_t *));
+	for (int d = 0; d < t->ndir; d++) {
+		int otype = 0, ctype = 0;
 		uint32_t no = 0, nc = 0;
 		unsigned char *o = NULL, *c = NULL;
 
 		if (tu_get_bytes(t, d, TAG_STRIPOFFSETS, &o, &no) == 0 && o != NULL) {
-			for (uint32_t i = 0; i < t->ndirs[0]; i++)
-				if (t->ents[0][i].tag == TAG_STRIPOFFSETS)
-					otype = t->ents[0][i].type;
+			for (uint32_t i = 0; i < t->ndirs[d]; i++)
+				if (t->ents[d][i].tag == TAG_STRIPOFFSETS)
+					otype = t->ents[d][i].type;
 		}
 		if (tu_get_bytes(t, d, TAG_STRIPBYTECOUNTS, &c, &nc) == 0 && c != NULL) {
-			for (uint32_t i = 0; i < t->ndirs[0]; i++)
-				if (t->ents[0][i].tag == TAG_STRIPBYTECOUNTS)
-					ctype = t->ents[0][i].type;
+			for (uint32_t i = 0; i < t->ndirs[d]; i++)
+				if (t->ents[d][i].tag == TAG_STRIPBYTECOUNTS)
+					ctype = t->ents[d][i].type;
 		}
 		if (o != NULL && c != NULL && no > 0 && nc > 0) {
 			uint32_t lim = no < nc ? no : nc;
 			size_t osz = type_size(otype), csz = type_size(ctype);
 			if (lim > 0 && osz > 0 && csz > 0) {
-				t->strips = calloc(lim, sizeof(uint32_t));
-				t->stripbc = calloc(lim, sizeof(uint32_t));
+				t->strips[d] = calloc(lim, sizeof(uint32_t));
+				t->stripbc[d] = calloc(lim, sizeof(uint32_t));
 				for (uint32_t k = 0; k < lim; k++) {
-					t->strips[k] = osz == 2 ? rd_be16(o + 2 * k, t->be)
-					                        : rd_be32(o + 4 * k, t->be);
-					t->stripbc[k] = csz == 2 ? rd_be16(c + 2 * k, t->be)
-					                        : rd_be32(c + 4 * k, t->be);
+					t->strips[d][k] = osz == 2
+					    ? rd_be16(o + 2 * k, t->be)
+					    : rd_be32(o + 4 * k, t->be);
+					t->stripbc[d][k] = csz == 2
+					    ? rd_be16(c + 2 * k, t->be)
+					    : rd_be32(c + 4 * k, t->be);
 				}
-				t->nstrips = lim;
+				t->nstrips[d] = lim;
 			}
 		}
 		free(o);
@@ -388,11 +416,20 @@ tiff_open_file(tiff_t *t, const char *path)
 	 * can safely hand to tiff_close(). */
 	memset(t, 0, sizeof(*t));
 
-	FILE *f = fopen(path, "rb");
+	FILE *f;
 	unsigned char *data = NULL;
 	size_t len = 0, cap = 0;
 	int rc;
+	struct stat st;
 
+	/* A directory opens successfully but never reads. The reference tool
+	 * words that the same way as a file that is not there at all. */
+	if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+		t->openerc = TUFF_ENOENT;
+		return TUFF_ENOENT;
+	}
+
+	f = fopen(path, "rb");
 	if (f == NULL) {
 		if (errno == ENOENT) {
 			t->openerc = TUFF_ENOENT;
@@ -429,16 +466,22 @@ tiff_open_file(tiff_t *t, const char *path)
 	}
 	fclose(f);
 	if (len == 0) {
+		/* A zero-length file is readable, it just is not a TIFF, so it
+		 * belongs with the other malformed inputs rather than with the
+		 * ones that could not be read at all. The caller words the two
+		 * cases differently. */
 		free(data);
-		fprintf(stderr, "TIFFOpen: %s: ", path);
-		fprintf(stderr, "%s.\n", "cannot read file");
-		fprintf(stderr, "Error: Can't open %s. Either it isn't readable, "
-		    "it isn't a TIFF file, or there are unrecognized tags; "
-		    "try tiffutil -dump for more info.\n", path);
-		return -1;
+		t->openerc = TUFF_EOPEN;
+		return TUFF_EOPEN;
 	}
 	rc = tiff_open_mem(t, data, len);
 	free(data);
+	if (rc < 0) {
+		/* Readable, but not a TIFF: the same class as a zero-length
+		 * file, so the caller words it the same way. */
+		t->openerc = TUFF_EOPEN;
+		return TUFF_EOPEN;
+	}
 	return rc;
 }
 

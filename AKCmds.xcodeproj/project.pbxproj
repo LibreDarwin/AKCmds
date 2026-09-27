@@ -106,6 +106,17 @@
 		A3000001000000000000002B /* icc_profiles.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = icc_profiles.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+		A2B00001000000000000001 /* textutil */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = textutil; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3B00001000000000000009 /* textutil.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = textutil.h; sourceTree = "<group>"; };
+		A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = format.c; sourceTree = "<group>"; };
+		A3B00001000000000000001 /* html.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = html.c; sourceTree = "<group>"; };
+		A3B00001000000000000002 /* info.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = info.c; sourceTree = "<group>"; };
+		A3B00001000000000000003 /* io.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = io.c; sourceTree = "<group>"; };
+		A3B00001000000000000004 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		A3B00001000000000000005 /* rtf.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rtf.c; sourceTree = "<group>"; };
+		A3B00001000000000000006 /* rtfd.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = rtfd.c; sourceTree = "<group>"; };
+		A3B00001000000000000007 /* txt.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = txt.c; sourceTree = "<group>"; };
+		A3B00001000000000000008 /* usage.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = usage.c; sourceTree = "<group>"; };
 /* Begin PBXFrameworksBuildPhase section */
 		A50000010000000000000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
@@ -190,6 +201,7 @@
 				A60000050000000000000010 /* tiff2icns */,
 				A60000050000000000000011 /* tops */,
 				A60000050000000000000020 /* tiffutil */,
+				A6B00001000000000000001 /* textutil */,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -270,6 +282,23 @@
 				A3000001000000000000002B /* icc_profiles.h */,
 			);
 			path = tiffutil;
+			sourceTree = "<group>";
+		};
+		A6B00001000000000000001 /* textutil */ = {
+			isa = PBXGroup;
+			children = (
+				A3B00001000000000000000 /* format.c */,
+				A3B00001000000000000001 /* html.c */,
+				A3B00001000000000000002 /* info.c */,
+				A3B00001000000000000003 /* io.c */,
+				A3B00001000000000000004 /* main.c */,
+				A3B00001000000000000005 /* rtf.c */,
+				A3B00001000000000000006 /* rtfd.c */,
+				A3B00001000000000000007 /* txt.c */,
+				A3B00001000000000000008 /* usage.c */,
+				A3B00001000000000000009 /* textutil.h */,
+			);
+			path = textutil;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -371,6 +400,34 @@
 			productReference = A20000010000000000000020 /* tiffutil */;
 			productType = "com.apple.product-type.tool";
 		};
+		A7B10001000000000000001 /* textutil */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A8B00001000000000000001 /* Build configuration list for PBXNativeTarget "textutil" */;
+			buildPhases = (
+				A5B00001000000000000001 /* Sources */,
+				A5B00001000000000000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = textutil;
+			productName = textutil;
+			productReference = A2B00001000000000000001 /* textutil */;
+			productType = "com.apple.product-type.tool";
+		};
+		A7B10001000000000000002 /* textutil-parity */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = A8B00001000000000000002 /* Build configuration list for PBXAggregateTarget "textutil-parity" */;
+			buildPhases = (
+				A5B00001000000000000003 /* textutil parity */,
+			);
+			dependencies = (
+				A7B00001000000000000006 /* PBXTargetDependency */,
+			);
+			name = "textutil-parity";
+			productName = "textutil-parity";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -401,6 +458,8 @@
 				A70000010000000000000016 /* tops-parity */,
 				A70000010000000000000020 /* tiffutil */,
 				A70000010000000000000021 /* tiffutil-parity */,
+				A7B10001000000000000001 /* textutil */,
+				A7B10001000000000000002 /* textutil-parity */,
 			);
 		};
 /* End PBXProject section */
@@ -446,6 +505,57 @@
 		};
 /* End PBXShellScriptBuildPhase section */
 
+		A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000000 /* format.c */; };
+		A1B00001000000000000001 /* html.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000001 /* html.c */; };
+		A1B00001000000000000002 /* info.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000002 /* info.c */; };
+		A1B00001000000000000003 /* io.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000003 /* io.c */; };
+		A1B00001000000000000004 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000004 /* main.c */; };
+		A1B00001000000000000005 /* rtf.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000005 /* rtf.c */; };
+		A1B00001000000000000006 /* rtfd.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000006 /* rtfd.c */; };
+		A1B00001000000000000007 /* txt.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000007 /* txt.c */; };
+		A1B00001000000000000008 /* usage.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000008 /* usage.c */; };
+		A5B00001000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1B00001000000000000000 /* format.c in Sources */,
+				A1B00001000000000000001 /* html.c in Sources */,
+				A1B00001000000000000002 /* info.c in Sources */,
+				A1B00001000000000000003 /* io.c in Sources */,
+				A1B00001000000000000004 /* main.c in Sources */,
+				A1B00001000000000000005 /* rtf.c in Sources */,
+				A1B00001000000000000006 /* rtfd.c in Sources */,
+				A1B00001000000000000007 /* txt.c in Sources */,
+				A1B00001000000000000008 /* usage.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00001000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A5B00001000000000000003 /* textutil parity */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "textutil parity";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "set -e\nORACLE=\"${ORACLE:-/usr/bin/textutil}\"\nif [ ! -x \"$BUILT_PRODUCTS_DIR/textutil\" ]; then\n  echo \"error: textutil was not built at $BUILT_PRODUCTS_DIR/textutil\"\n  exit 1\nfi\nif [ ! -x \"$ORACLE\" ]; then\n  echo \"warning: oracle $ORACLE is absent, skipping byte-parity verification\"\n  exit 0\nfi\nMY=\"$BUILT_PRODUCTS_DIR/textutil\" ORACLE=\"$ORACLE\" bash \"$SRCROOT/tests/textutil-parity.sh\"\n";
+		};
 /* Begin PBXSourcesBuildPhase section */
 		A50000010000000000000003 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -515,6 +625,18 @@
 			isa = PBXTargetDependency;
 			target = A70000010000000000000020 /* tiffutil */;
 			targetProxy = A7B000010000000000000003 /* PBXContainerItemProxy */;
+		};
+		A7B00001000000000000005 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60000010000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A7B10001000000000000001;
+			remoteInfo = textutil;
+		};
+		A7B00001000000000000006 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A7B10001000000000000001 /* textutil */;
+			targetProxy = A7B00001000000000000005 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -673,6 +795,34 @@
 			};
 			name = Release;
 		};
+		A9B00001000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A9B00001000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+		A9B00001000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		A9B00001000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -767,6 +917,24 @@
 			buildConfigurations = (
 				A80000010000000000000033 /* Debug */,
 				A80000010000000000000034 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A8B00001000000000000001 /* Build configuration list for PBXNativeTarget "textutil" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9B00001000000000000001 /* Debug */,
+				A9B00001000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A8B00001000000000000002 /* Build configuration list for PBXAggregateTarget "textutil-parity" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A9B00001000000000000003 /* Debug */,
+				A9B00001000000000000004 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

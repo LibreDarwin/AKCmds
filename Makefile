@@ -37,6 +37,13 @@ OPEN_OBJS := $(OBJDIR)/open.o
 TIFF2ICNS_BIN := $(BUILD_DIR)/tiff2icns
 TIFF2ICNS_OBJS := $(OBJDIR)/tiff2icns.o
 
+TEXTUTIL_BIN := $(BUILD_DIR)/textutil
+TEXTUTIL_OBJS := $(OBJDIR)/textutil_main.o $(OBJDIR)/textutil_txt.o \
+	$(OBJDIR)/textutil_rtf.o $(OBJDIR)/textutil_rtfd.o \
+	$(OBJDIR)/textutil_html.o $(OBJDIR)/textutil_info.o \
+	$(OBJDIR)/textutil_format.o $(OBJDIR)/textutil_io.o \
+	$(OBJDIR)/textutil_usage.o
+
 TOPS_BIN := $(BUILD_DIR)/tops
 TOPS_OBJS := $(OBJDIR)/tops.o
 
@@ -48,7 +55,7 @@ TIFFUTIL_OBJS := $(OBJDIR)/buf.o $(OBJDIR)/cat.o $(OBJDIR)/compress.o \
 	$(OBJDIR)/tiff_text.o $(OBJDIR)/tiff_write.o $(OBJDIR)/main.o
 
 all: $(PB_COPY) $(PB_PASTE) $(OPEN_BIN) $(TIFF2ICNS_BIN) $(TOPS_BIN) \
-	$(TIFFUTIL_BIN)
+	$(TIFFUTIL_BIN) $(TEXTUTIL_BIN)
 
 $(PB_COPY): $(PB_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -81,6 +88,49 @@ $(TIFF2ICNS_BIN): $(TIFF2ICNS_OBJS)
 $(OBJDIR)/tiff2icns.o: src/tiff2icns/tiff2icns.m
 	@mkdir -p $(OBJDIR)
 	$(CC) $(MFLAGS) -c -o $@ src/tiff2icns/tiff2icns.m
+
+# textutil is plain C like tiffutil: no Cocoa, no frameworks, nothing to link
+# but the objects.  The objects are named apart from tiffutil's because both
+# tools have a main.c and share the object directory.
+$(TEXTUTIL_BIN): $(TEXTUTIL_OBJS)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $(TEXTUTIL_OBJS)
+
+$(OBJDIR)/textutil_main.o: src/textutil/main.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/main.c
+
+$(OBJDIR)/textutil_txt.o: src/textutil/txt.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/txt.c
+
+$(OBJDIR)/textutil_rtf.o: src/textutil/rtf.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/rtf.c
+
+$(OBJDIR)/textutil_rtfd.o: src/textutil/rtfd.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/rtfd.c
+
+$(OBJDIR)/textutil_html.o: src/textutil/html.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/html.c
+
+$(OBJDIR)/textutil_info.o: src/textutil/info.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/info.c
+
+$(OBJDIR)/textutil_format.o: src/textutil/format.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/format.c
+
+$(OBJDIR)/textutil_io.o: src/textutil/io.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/io.c
+
+$(OBJDIR)/textutil_usage.o: src/textutil/usage.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/usage.c
 
 $(TOPS_BIN): $(TOPS_OBJS)
 	@mkdir -p $(BUILD_DIR)
@@ -179,10 +229,18 @@ pbcopy-parity: all
 tiffutil-parity: all
 	MY="build/$(CONFIG)/tiffutil" bash tests/tiffutil-parity.sh
 
-test: parity tiff2icns-parity open-parity pbcopy-parity tiffutil-parity
+# textutil.  The harness compares the option parser, -info and the txt, rtf,
+# rtfd and html writers against /usr/bin/textutil; the doc family is
+# recognised but not written, so it is out of scope; see src/textutil/NOTES.md.
+# Same MY convention and same reasoning about prerequisites and bash as above.
+textutil-parity: all
+	MY="build/$(CONFIG)/textutil" bash tests/textutil-parity.sh
+
+test: parity tiff2icns-parity open-parity pbcopy-parity tiffutil-parity \
+	textutil-parity
 
 clean:
 	rm -rf build
 
 .PHONY: all parity tiff2icns-parity open-parity pbcopy-parity tiffutil-parity \
-	test clean
+	textutil-parity test clean

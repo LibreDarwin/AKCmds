@@ -1,0 +1,224 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/textutil.
+.TH TEXTUTIL 1 "September 27, 2026" "LibreDarwin"
+.SH NAME
+\fBtextutil\fR \- convert text between formats
+.SH SYNOPSIS
+.B textutil
+[\fB\-help\fR]
+[\fIcommand_option\fR] [\fIother_options\fR] \fIfile\fR...
+.SH DESCRIPTION
+.B textutil
+converts a file between plain text, RTF, RTFD and HTML, and reports what a
+file is with
+.BR -info .
+It reads UTF-8 plain text by default, keeping a byte order mark out of the
+text, and writes UTF-8 unless
+.B \-encoding
+says otherwise.
+.PP
+A file is taken as what its name says it is, and
+.B \-format
+overrides that. A name that is not one of the formats below is read as plain
+text, and the contents are then used to tell the rich formats apart: a file
+that begins with
+.B {\\rtf1
+is RTF, a folder holding a
+.B TXT.rtf
+is an RTFD bundle, and a file that begins with a tag or a
+.BR <!DOCTYPE >
+is HTML.
+.PP
+With no command option,
+.B \-help
+is the default and prints the usage message.
+.SH COMMANDS
+Exactly one command may be given.
+.TP
+.B \-help
+Print the usage message and exit.
+.TP
+.B \-info
+For each input file, print its name, the format it was read as, its size in
+bytes, its length in UTF-16 code units, its metadata, and a preview of its
+first line. The preview is cut to 30 code units and ends in
+.B ...
+when anything was left out. A line separator ends the preview as a newline
+does, and what is behind one is not shown. An empty file has no preview.
+.TP
+.BI \-convert " fmt"
+Read each input file and write it in
+.IR fmt ,
+which is one of
+.BR txt ,
+.BR rtf ,
+.BR rtfd ,
+.BR html ,
+.BR doc ,
+.BR docx ,
+.BR odt ,
+.B wordml
+or
+.BR webarchive .
+.TP
+.BI \-cat " fmt"
+Read every input file and write them as one file in
+.IR fmt .
+Only the first input file's name is used for the output.
+.SH OPTIONS
+.TP
+.BI \-extension " ext"
+Use
+.I ext
+in place of the input file's extension when naming an output file.
+.TP
+.BI \-output " path"
+Write the first output file to
+.IR path .
+.TP
+.B \-stdin
+Read from standard input instead of from the file list. Any file named on the
+command line is then an error, because the two cannot both be the input.
+.TP
+.B \-stdout
+Write the first output file to standard output instead of to a file.
+.TP
+.BI \-encoding " name"
+Encode plain text and HTML output with
+.IR name ,
+which is an IANA name such as
+.B UTF-8
+or
+.BR ISO-Latin-1 ,
+or an
+.B NSStringEncoding
+number.
+.B UTF-8
+is the default. The option has no effect on RTF, RTFD or the office
+containers.
+.TP
+.BI \-inputencoding " name"
+Read plain text input as
+.IR name .
+By default the encoding is taken from a byte order mark, and failing that
+assumed to be UTF-8.
+.TP
+.BI \-format " fmt"
+Read every input file as
+.I fmt
+rather than deciding from its name and contents. This is how a plain text file
+is read as something richer.
+.TP
+.BI \-font " font"
+The font to use when converting plain text to rich text.
+.TP
+.BI \-fontsize " size"
+The font size to use when converting plain text to rich text.
+.TP
+.B \-\-
+Every argument after this one is a file name, even one that begins with a
+hyphen.
+.TP
+.B \-noload
+Do not load the resources an HTML file refers to.
+.TP
+.B \-nostore
+Do not write out the resources an HTML file refers to.
+.TP
+.BI \-baseurl " url"
+The base URL for the resources an HTML file refers to.
+.TP
+.BI \-timeout " t"
+How many seconds to wait for an HTML resource to load.
+.TP
+.BI \-textsizemultiplier " x"
+Multiply the font sizes in an HTML file by
+.IR x .
+.TP
+.BI \-excludedelements " (tag1, tag2, ...)"
+Leave the named HTML elements out of HTML output.
+.TP
+.BI \-prefixspaces " n"
+Indent nested HTML output by
+.I n
+spaces.
+.TP
+.B \-strip
+Leave the input's metadata out of the output.
+.TP
+.BI \-title " val"
+The title to record in the output.
+.TP
+.BI \-author " val"
+The author to record in the output.
+.TP
+.BI \-subject " val"
+The subject to record in the output.
+.TP
+.BI \-keywords " (val1, val2, ...)"
+The keywords to record in the output, as a comma separated list.
+.TP
+.BI \-comment " val"
+The comment to record in the output.
+.TP
+.BI \-editor " val"
+The last editor to record in the output.
+.TP
+.BI \-company " val"
+The company to record in the output.
+.TP
+.BI \-creationtime " yyyy-mm-ddThh:mm:ssZ"
+The creation time to record in the output, in UTC.
+.TP
+.BI \-modificationtime " yyyy-mm-ddThh:mm:ssZ"
+The modification time to record in the output, in UTC.
+.SH OUTPUT
+The first output file is named after the first input file, with the extension
+the command gives it. Each further input file takes the next available name,
+and
+.B \-output
+overrides the first. A destination that cannot be written to is reported and
+stops the run before anything is written.
+.PP
+An RTFD bundle is a folder holding the RTF as
+.BR TXT.rtf .
+.SH EXIT STATUS
+0 on success, and also when a file cannot be read, which is reported on
+standard error instead.
+.B -cat
+differs from the other commands here: it returns 1 on a read failure.
+.SH EXAMPLES
+Report what a file is:
+.PP
+.RS
+.nf
+textutil \-info notes.txt
+.fi
+.RE
+.PP
+Make an RTF bundle of two plain text files, joined:
+.PP
+.RS
+.nf
+textutil \-cat rtf \-output report.rtfd a.txt b.txt
+.fi
+.RE
+.PP
+Take the metadata off a file and write the text back out:
+.PP
+.RS
+.nf
+textutil \-strip \-convert txt \-output clean.txt draft.rtf
+.fi
+.RE
+.SH SEE ALSO
+.BR iconv (1),
+.BR plutil (1),
+.BR sed (1)
+.SH NOTES
+.RB ` NOTES.md '
+in the source tree records what the reference implementation does in the
+cases where its behaviour is surprising, and where this port deliberately
+differs from it.

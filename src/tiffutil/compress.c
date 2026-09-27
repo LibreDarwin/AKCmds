@@ -25,6 +25,7 @@
 #define LZW_EOI   257
 #define LZW_FIRST 258
 #define LZW_MAX   4096
+#define HSIZE     5021
 
 /* One decoder-visible dictionary entry. */
 typedef struct {
@@ -42,7 +43,6 @@ int
 lzw_encode(const unsigned char *in, size_t inlen, unsigned char **out,
     size_t *outlen)
 {
-	static const size_t HSIZE = 5021;
 	uint32_t hkey[HSIZE];
 	uint16_t hval[HSIZE];
 	unsigned char hused[HSIZE];

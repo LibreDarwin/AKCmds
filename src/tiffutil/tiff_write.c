@@ -214,7 +214,7 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 		 * is followed by a pad byte.  The head's strip sits straight after
 		 * the 8-byte header, a later one wherever the caller has got to. */
 		pad = (strip_abs + im->striplen) & 1;
-		ifd_off = strip_abs + im->striplen + pad;
+		ifd_off = (uint32_t)(strip_abs + im->striplen + pad);
 		ext_base = strip_abs + im->striplen + pad + 2 + (size_t)12 * nf + 4;
 		cur = ext_base;
 		for (size_t k = 0; k < sizeof(ext_order) / sizeof(ext_order[0]); k++) {

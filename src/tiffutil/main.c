@@ -908,7 +908,7 @@ run_reports(int op, int argc, char **argv, int first)
 int
 main(int argc, char **argv)
 {
-	const char *cmd, *inpath, *outpath = "out.tiff";
+	const char *cmd, *inpath = NULL, *outpath = "out.tiff";
 	int have_extract = 0, is_extract, op, i, ninfile = 0;
 
 	/* A lone argument is never enough to name an operation, so the reference

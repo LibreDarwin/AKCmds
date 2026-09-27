@@ -186,8 +186,8 @@ icc_profile_name(tiff_t *t, int dir, char *out, size_t outsz)
 			uint32_t n = rd_be32(icc + absoff + 4, be);
 			if (absoff + 8 + n * 2 > icclen)
 				n = (icclen - absoff - 8) / 2;
-			if (n > (outsz - 1) / 2)
-				n = (outsz - 1) / 2;
+			if (n > (uint32_t)((outsz - 1) / 2))
+				n = (uint32_t)((outsz - 1) / 2);
 			(void)rlen;
 			for (uint32_t k = 0; k < n; k++)
 				out[k] = (char)icc[absoff + 8 + 2 * k + 1];

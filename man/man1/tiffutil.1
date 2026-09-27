@@ -1,0 +1,176 @@
+.\" Copyright (C) 2026, LibreDarwin
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Clean-room re-authoring derived from the observed behavior of Apple's
+.\" /usr/bin/tiffutil.
+.TH TIFFUTIL 1 "September 25, 2026" "LibreDarwin"
+.SH NAME
+\fBtiffutil\fR \- convert and inspect TIFF image files
+.SH SYNOPSIS
+.B tiffutil
+.I operation
+.RI [ num ]
+.I infile
+.RB [ \-out
+.IR outfile ]
+.SH DESCRIPTION
+.B tiffutil
+reads a TIFF file, prints information about it, or rewrites it, converting
+the image data to a different compression scheme along the way.
+.PP
+Exactly one
+.I operation
+must be given, and it must be the first argument.  The
+.I infile
+is the argument that follows the operation, or follows the image number for
+.BR \-extract .
+An output file may be named with
+.BR \-out ;
+it must come after the input file.  Without
+.BR \-out ,
+the result is written to
+.BR out.tiff .
+.PP
+The three
+.BR \-info ,
+.B \-verboseinfo
+and
+.B \-dump
+operations take one or more input files and print to standard output.  They
+do not accept
+.BR \-out .
+.PP
+Rewritten files are always big-endian, carry a single strip with
+.B RowsPerStrip
+equal to the image height, and gain an ICC profile for their colour space that
+the input may not have had.  Pixel values are preserved; only the container
+around them changes.  When several images are present in a file, the
+.BR \-none ,
+.B \-lzw
+and
+.B \-packbits
+operations rewrite the first one.
+.SH OPERATIONS
+.TP
+.B \-none
+Rewrite the file uncompressed.
+.TP
+.B \-lzw
+Rewrite the file with LZW compression.  For 8-bit data the horizontal
+differencing predictor is applied and recorded, which is what makes the
+compression worthwhile.
+.TP
+.B \-packbits
+Rewrite the file with PackBits compression.
+.TP
+.BI \-cat " infile1" " [infile2 ...]"
+Concatenate the named files into one multi-directory TIFF.  The images must be
+of the same size;
+.B tiffutil
+warns when they are not, because readers have no reliable way to choose
+between them.
+.TP
+.BI \-catnosizecheck " infile1" " [infile2 ...]"
+As
+.BR \-cat ,
+but the size check is suppressed.
+.TP
+.BI \-cathidpicheck " infile1" " [infile2 ...]"
+As
+.BR \-cat ,
+but differing horizontal resolutions are tolerated.
+.TP
+.BI \-extract " num" " infile"
+Write image
+.I num
+to a new file, keeping whatever compression that directory used.  Numbering
+starts at 0.
+.TP
+.B \-info
+Print a per-directory summary: geometry, depth, compression, resolution, and
+whether an alpha channel or a profile is present.
+.TP
+.B \-verboseinfo
+As
+.BR \-info ,
+and additionally print the offset and byte count of every strip.
+.TP
+.B \-dump
+Print the raw image file directory: every tag, its type, count and value.
+.SH DIAGNOSTICS
+On success
+.B tiffutil
+prints
+.RI \(lq N\  image s\  written\ to\  outfile .\(rq
+to standard error and exits 0.  Nothing is written to standard output.
+.PP
+Failures print a message describing the problem, followed by a usage summary.
+An output file is not created when an error is reported.
+.PP
+.B tiffutil
+exits 1 for a usage error and 5 when an input file cannot be turned into an
+image.
+.SH EXAMPLES
+Re-encode a file uncompressed:
+.PP
+.RS
+.nf
+tiffutil -none photo.tiff -out photo-raw.tiff
+.fi
+.RE
+.PP
+Compress it with LZW instead:
+.PP
+.RS
+.nf
+tiffutil -lzw photo.tiff -out photo-lzw.tiff
+.fi
+.RE
+.PP
+Build a multi-page file from two images of the same size:
+.PP
+.RS
+.nf
+tiffutil -cat page1.tiff page2.tiff -out pages.tiff
+.fi
+.RE
+.PP
+Pull one page back out of it:
+.PP
+.RS
+.nf
+tiffutil -extract 1 pages.tiff -out page2.tiff
+.fi
+.RE
+.PP
+See what a file actually contains:
+.PP
+.RS
+.nf
+tiffutil -verboseinfo photo.tiff
+.fi
+.RE
+.SH NOTES
+.B \-cat
+requires its inputs to be the same size, and says so on standard error when
+they are not:
+.PP
+.RS
+.nf
+Warning: Sizes of concatenated images are not the same; this will lead
+to problems in choosing the appropriate image in some cases.
+.fi
+.RE
+.PP
+The reference implementation of
+.B tiffutil
+crashes when
+.B \-info
+or
+.B \-verboseinfo
+is given a file that is missing or is not a TIFF.  This implementation reports
+the error and exits non-zero instead.
+.SH SEE ALSO
+.BR tiff2icns (1),
+.BR sips (1),
+.BR iconutil (1),
+.BR tops (1)

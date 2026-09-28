@@ -125,6 +125,52 @@ static const unsigned short cp1252_above[32] = {
 };
 
 /* The code page byte for a character, or 0 when it has none. */
+static unsigned char to_cp1252(unsigned long cp);
+
+/* The length in bytes of the UTF-8 character that starts with c, which is
+ * what the loops below advance by.  A byte that cannot start one counts as
+ * one, since it is written as U+FFFD and takes up no room. */
+static size_t
+utf8_width(unsigned char c)
+{
+	if ((c & 0xE0) == 0xC0)
+		return 2;
+	if ((c & 0xF0) == 0xE0)
+		return 3;
+	if ((c & 0xF8) == 0xF0)
+		return 4;
+	return 1;
+}
+
+/* Whether the character at p has to be written as a \u escape, which is what
+ * happens when the code page the header names has no byte for it.  RTF is
+ * 7-bit, so a character that does have one is written as \'hh and needs no
+ * escape, and the reference tool lets those run without saying \uc0 again. */
+static int
+needs_uc(const unsigned char *p, size_t n)
+{
+	unsigned long cp;
+	size_t seq;
+
+	if (n == 0)
+		return 0;
+	seq = utf8_width(p[0]);
+	if (seq == 1)
+		return p[0] >= 0x80 && to_cp1252(p[0]) == 0;
+	if (p[0] < 0x80)
+		return 0;
+	if (seq == 2)
+		cp = (unsigned char)p[0] & 0x1Fu;
+	else if (seq == 3)
+		cp = (unsigned char)p[0] & 0x0Fu;
+	else
+		cp = (unsigned char)p[0] & 0x07u;
+	for (size_t k = 1; k < seq && k < n; k++)
+		cp = (cp << 6) | ((unsigned char)p[k] & 0x3Fu);
+	return to_cp1252(cp) == 0;
+}
+
+/* The code page byte for a character, or 0 when it has none. */
 static unsigned char
 to_cp1252(unsigned long cp)
 {
@@ -143,9 +189,11 @@ to_cp1252(unsigned long cp)
  * escape the reader is to skip, and it belongs in front of the first \u of a
  * value and nowhere else: the reference tool writes it once and then lets the
  * escapes run, and does not write it a second time after a \'hh or after a
- * character that needed no escape of its own.  A character above the basic
- * plane is therefore a pair of escapes rather than one.  Everything below 0x80
- * is passed through untouched, control characters included.
+ * character that needed no escape of its own.  A paragraph mark does end that,
+ * though, so the first \u after one carries \uc0 again; the body text below
+ * keeps the same rule.  A character above the basic plane is therefore a pair
+ * of escapes rather than one.  Everything below 0x80 is passed through
+ * untouched, control characters included.
  *
  * A byte that is not part of a well formed UTF-8 character is U+FFFD, one for
  * each ill-formed piece of input, which is how a command line argument that
@@ -288,6 +336,11 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	int empty = d->nchars == 0;
 	const unsigned char *p = (const unsigned char *)d->text;
 	size_t i = 0;
+	/* The reference tool writes the text as a C string, so a NUL ends it and
+	 * nothing after the NUL is written at all -- not even the high bytes that
+	 * would have followed it.  Every other control character is passed
+	 * through as itself. */
+	size_t len = 0;
 	tu_font_t face;
 	int points = 12;
 
@@ -333,7 +386,9 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		sink_str(&s, " \\cf0 ");
 	}
 
-	while (i < d->len) {
+	len = d->len;
+
+	while (i < len) {
 		unsigned char c = p[i];
 		unsigned long cp;
 		size_t seq = 1;
@@ -354,7 +409,7 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			cp = c;
 			seq = 1;
 		}
-		for (size_t k = 1; k < seq && i + k < d->len; k++)
+		for (size_t k = 1; k < seq && i + k < len; k++)
 			cp = (cp << 6) | (p[i + k] & 0x3Fu);
 		i += seq;
 
@@ -371,18 +426,52 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		case '\t':
 			sink_put(&s, "\t", 1);
 			continue;
+		case '\f':
+			/* A form feed is a page break, which is the one control
+			 * RTF spells out rather than writing as itself.  It also
+			 * ends what the text before it set up, the way a
+			 * paragraph mark does, so the next \u escape says \uc0
+			 * again. */
+			wrote_uc0 = 0;
+			sink_str(&s, "\\page ");
+			continue;
+		case 0:
+			/* A NUL ends the text of the run it falls in.  What
+			 * follows is dropped up to the next page break,
+			 * paragraph mark, or character that has no code page
+			 * byte and so needs a \u escape, and any of those
+			 * begins a run that the NUL does not reach into.  A CR
+			 * that begins the paragraph is swallowed with the text
+			 * that came before it, and so is a CR that pairs with
+			 * the LF after it; a CR on its own is a paragraph mark
+			 * and ends the paragraph, so the one that is left over
+			 * is written as a mark and the text after it survives.
+			 *
+			 * The scan decodes as it goes rather than testing byte
+			 * by byte, because whether a run resumes depends on the
+			 * character and not on its first byte. */
+			while (i < len && p[i] != '\f' && p[i] != '\r' &&
+			    p[i] != '\n' && !needs_uc(p + i, len - i))
+				i += utf8_width((unsigned char)p[i]);
+			if (i < len && p[i] == '\r' && i + 1 < len &&
+			    p[i + 1] == '\n')
+				i++;
+			continue;
 		case '\r':
 			/* A lone carriage return is RTF's paragraph mark.  Inside a
 			 * CRLF pair the CR is passed through untouched and the LF
 			 * that follows becomes the mark, which is what the
 			 * reference tool writes. */
-			if (i < d->len && p[i] == '\n') {
+			if (i < len && p[i] == '\n') {
 				sink_put(&s, "\r", 1);
 				continue;
 			}
 			/* FALLTHROUGH */
 		case '\n':
-			/* A backslash plus a raw newline: RTF's paragraph mark. */
+			/* A backslash plus a raw newline: RTF's paragraph mark.  It ends
+			 * the paragraph, and with it whatever the previous one set up,
+			 * so the next paragraph that needs a \u escape says \uc0 again. */
+			wrote_uc0 = 0;
 			sink_put(&s, "\\\n", 2);
 			continue;
 		}
@@ -390,12 +479,16 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			sink_put(&s, (const char *)&c, 1);
 			continue;
 		}
-		if (cp <= 0xFF) {
-			char esc[8];
+		{
+			unsigned char b = to_cp1252(cp);
 
-			snprintf(esc, sizeof(esc), "\\'%02lx", cp);
-			sink_str(&s, esc);
-			continue;
+			if (b != 0) {
+				char esc[8];
+
+				snprintf(esc, sizeof(esc), "\\'%02x", b);
+				sink_str(&s, esc);
+				continue;
+			}
 		}
 		if (!wrote_uc0) {
 			sink_str(&s, "\\uc0");

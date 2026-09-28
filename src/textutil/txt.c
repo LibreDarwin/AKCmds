@@ -3,9 +3,11 @@
  *
  * Input is decoded to UTF-8.  The reference tool detects a leading byte order
  * mark and honours it: a UTF-8 mark is dropped and the rest read as UTF-8, and
- * a UTF-16 or UTF-32 mark selects that encoding.  Absent a mark, plain text is
- * read as UTF-8.  The mark itself is consumed, so it never reaches -info's
- * length or contents, and it is not written back out.
+ * a UTF-16 or UTF-32 mark selects that encoding.  Absent a mark, the buffer is
+ * read as UTF-8 if every byte of it is well formed, and as Mac OS Roman if any
+ * byte is not: it does not repair a buffer that is partly UTF-8 but reads all
+ * of it as the fallback.  The mark itself is consumed, so it never reaches
+ * -info's length or contents, and it is not written back out.
  *
  * Output is the decoded text verbatim, so a round trip of unmarked UTF-8 is
  * the identity.  -encoding names one of the Unicode encodings and is applied
@@ -103,6 +105,192 @@ decode_unit(char *out, unsigned long cp)
 	out[3] = (char)(0x80 | (cp & 0x3F));
 	return 4;
 }
+
+/* Mac OS Roman for the bytes above 0x7F, taken from the reference tool one
+ * byte at a time.  The half below is ASCII and stands for itself.  Every value
+ * is a Unicode scalar, so decode_unit() accepts all of them. */
+static const unsigned short mac_roman_high[128] = {
+	0x00c4, 0x00c5, 0x00c7, 0x00c9, 0x00d1, 0x00d6, 0x00dc, 0x00e1, /* 80 */
+	0x00e0, 0x00e2, 0x00e4, 0x00e3, 0x00e5, 0x00e7, 0x00e9, 0x00e8, /* 88 */
+	0x00ea, 0x00eb, 0x00ed, 0x00ec, 0x00ee, 0x00ef, 0x00f1, 0x00f3, /* 90 */
+	0x00f2, 0x00f4, 0x00f6, 0x00f5, 0x00fa, 0x00f9, 0x00fb, 0x00fc, /* 98 */
+	0x2020, 0x00b0, 0x00a2, 0x00a3, 0x00a7, 0x2022, 0x00b6, 0x00df, /* a0 */
+	0x00ae, 0x00a9, 0x2122, 0x00b4, 0x00a8, 0x2260, 0x00c6, 0x00d8, /* a8 */
+	0x221e, 0x00b1, 0x2264, 0x2265, 0x00a5, 0x00b5, 0x2202, 0x2211, /* b0 */
+	0x220f, 0x03c0, 0x222b, 0x00aa, 0x00ba, 0x03a9, 0x00e6, 0x00f8, /* b8 */
+	0x00bf, 0x00a1, 0x00ac, 0x221a, 0x0192, 0x2248, 0x2206, 0x00ab, /* c0 */
+	0x00bb, 0x2026, 0x00a0, 0x00c0, 0x00c3, 0x00d5, 0x0152, 0x0153, /* c8 */
+	0x2013, 0x2014, 0x201c, 0x201d, 0x2018, 0x2019, 0x00f7, 0x25ca, /* d0 */
+	0x00ff, 0x0178, 0x2044, 0x20ac, 0x2039, 0x203a, 0xfb01, 0xfb02, /* d8 */
+	0x2021, 0x00b7, 0x201a, 0x201e, 0x2030, 0x00c2, 0x00ca, 0x00c1, /* e0 */
+	0x00cb, 0x00c8, 0x00cd, 0x00ce, 0x00cf, 0x00cc, 0x00d3, 0x00d4, /* e8 */
+	0xf8ff, 0x00d2, 0x00da, 0x00db, 0x00d9, 0x0131, 0x02c6, 0x02dc, /* f0 */
+	0x00af, 0x02d8, 0x02d9, 0x02da, 0x00b8, 0x02dd, 0x02db, 0x02c7, /* f8 */
+};
+
+/* Whether every byte of the buffer belongs to a well formed UTF-8 sequence.
+ * This is the same notion of well formedness tu_utf8_strict() applies, asked
+ * as a question about the whole buffer rather than about the sequence at one
+ * place.  tu_utf8_strict() gives a well formed sequence the full length its
+ * lead byte calls for and a malformed one less, so the two disagree only where
+ * a sequence is not well formed, which is what this is looking for. */
+static int
+plain_is_utf8(const unsigned char *p, size_t n)
+{
+	for (size_t i = 0; i < n;) {
+		size_t want, got;
+		unsigned char c = p[i];
+
+		if (c < 0x80)
+			want = 1;
+		else if ((c & 0xE0) == 0xC0)
+			want = 2;
+		else if ((c & 0xF0) == 0xE0)
+			want = 3;
+		else
+			want = 4;
+		/* A malformed sequence is reported as U+FFFD, which a well
+		 * formed one can also be, so the code point says nothing and
+		 * the length says everything. */
+		(void)tu_utf8_strict(p + i, n - i, &got);
+		if (got < want)
+			return 0;
+		i += got;
+	}
+	return 1;
+}
+
+/* Whether the reference tool takes a stretch of text as Mac OS Roman at all.
+ *
+ * Mac OS Roman is the fallback for text that is not UTF-8, and the test is
+ * made once over the whole text before any of it is decoded.  What counts as
+ * "not UTF-8" is narrower than it looks: a byte that is not part of a well
+ * formed sequence condemns the text, but only 0xA9 is excused.  So a buffer
+ * holding nothing but ASCII and stray 0xA9 bytes is still read as UTF-8, with
+ * each of those bytes coming back as U+FFFD: "\251" is U+FFFD, "\251\251" is
+ * two of them, and "A\251A" is U+FFFD between two A's.  Every other byte above
+ * 0x7F that stands outside a well formed sequence condemns the buffer, so
+ * "\251\200" is ©Ä.
+ *
+ * The well formed part is neither excused nor condemned.  It only ever keeps
+ * the bytes around it from condemning the text, and once they have, it is read
+ * from the table like any other: the valid é in "a\303\251\342b" comes back as
+ * √©, the two characters its own bytes spell, because the malformed \342 has
+ * condemned the text by then.  One sequence is a poor guide in the other
+ * direction, the overlong form, which is not a sequence at all: "\300\200" is
+ * ¿Ä, both bytes read from the table.
+ *
+ * The decision is about the whole text and not about the run of bytes one 0xA9
+ * happens to sit in, so 0xA9 beside a condemning byte is © like any other, and
+ * 0xA9 on a line of a file holding every byte from 0x80 up is © as well. */
+static int
+is_mac_roman(const unsigned char *p, size_t n)
+{
+	for (size_t i = 0; i < n;) {
+		unsigned char c = p[i];
+		size_t want, got;
+
+		if (c < 0x80) {
+			i++;
+			continue;
+		}
+		if (c == 0xA9) {
+			/* The one byte that is repaired rather than believed. */
+			i++;
+			continue;
+		}
+		if ((c & 0xE0) == 0xC0)
+			want = 2;
+		else if ((c & 0xF0) == 0xE0)
+			want = 3;
+		else
+			want = 4;
+		/* A malformed sequence is reported as U+FFFD, which a well
+		 * formed one can also be, so the code point says nothing and
+		 * the length says everything.  A short length here means this
+		 * byte is not part of a well formed sequence, and so condemns
+		 * the text. */
+		(void)tu_utf8_strict(p + i, n - i, &got);
+		if (got < want)
+			return 1;
+		i += got;
+	}
+	return 0;
+}
+
+/* Read a stretch of text as Mac OS Roman and write it out as UTF-8.  One byte
+ * in is one character out, so the character count is the byte count.  A Mac OS
+ * Roman character is never more than three bytes of UTF-8, so this can grow
+ * the buffer threefold and no further. */
+static size_t
+decode_mac_roman(const unsigned char *raw, size_t rawlen, char **out)
+{
+	char *text = xmalloc(rawlen * 3 + 1);
+	size_t len = 0;
+
+	for (size_t i = 0; i < rawlen; i++) {
+		unsigned long cp;
+
+		if (raw[i] < 0x80)
+			cp = raw[i];
+		else
+			cp = mac_roman_high[raw[i] - 0x80];
+		len += decode_unit(text + len, cp);
+	}
+	text[len] = '\0';
+	*out = text;
+	return len;
+}
+
+/* Read a stretch of text as UTF-8 and write it out as UTF-8, repairing what is
+ * not well formed, and report how many characters it holds.  The bytes that
+ * get repaired are the ones is_mac_roman() excused, and each is one U+FFFD
+ * however long the run it started was.  A well formed sequence is kept as it
+ * stands, so no buffer ever grows here: the repair replaces bytes with three
+ * only when the byte it replaces stood alone.  A four byte sequence is above
+ * the BMP and so stands for two UTF-16 units, which is what -info counts. */
+static size_t
+decode_utf8_loose(const unsigned char *raw, size_t rawlen, char **out,
+    size_t *nchars)
+{
+	char *text = xmalloc(rawlen * 3 + 1);
+	size_t len = 0;
+
+	*nchars = 0;
+	for (size_t i = 0; i < rawlen;) {
+		unsigned long cp;
+		size_t got;
+
+		if (raw[i] < 0x80) {
+			cp = raw[i];
+			got = 1;
+		} else {
+			cp = tu_utf8_strict(raw + i, rawlen - i, &got);
+			if (got == 1) {
+				/* Either a byte that cannot begin a character or
+				 * a sequence that goes wrong partway.  Both
+				 * cost one U+FFFD, and either way the bytes
+				 * that were not part of a well formed
+				 * sequence are not carried over. */
+				cp = 0xFFFD;
+				got = 1;
+			} else {
+				*nchars += got == 4 ? 2 : 1;
+				memcpy(text + len, raw + i, got);
+				len += got;
+				i += got;
+				continue;
+			}
+		}
+		len += decode_unit(text + len, cp);
+		(*nchars)++;
+		i += got;
+	}
+	text[len] = '\0';
+	*out = text;
+	return len;
+}
+
 
 /* The wide code unit of "width" bytes at p, in the byte order the mark named. */
 static unsigned long
@@ -227,13 +415,18 @@ tu_decode_plain(const void *buf, size_t rawlen, tu_doc_t *out)
 	char *text = NULL;
 	size_t len = 0, nchars = 0;
 	size_t wide = 0;		/* bytes per code unit once decoded */
+	size_t skip = 0;		/* UTF-8 mark, dropped only if it fits */
 	int be = 0;			/* that code unit is big endian */
 
 	out->text = NULL;
 	out->len = 0;
 	out->nchars = 0;
 
-	/* Pick the encoding from a leading mark, and skip the mark. */
+	/* Pick the encoding from a leading mark.  A UTF-16 or UTF-32 mark names
+	 * the encoding outright, so it is dropped here and its text read that way
+	 * whatever else it holds.  A UTF-8 mark only says what the text would be
+	 * anyway, so it is left in place for the plain text path below to weigh
+	 * with the rest of the buffer. */
 	if (rawlen >= 4 && raw[0] == 0xFF && raw[1] == 0xFE &&
 	    raw[2] == 0x00 && raw[3] == 0x00) {
 		raw += 4; rawlen -= 4; wide = 4;
@@ -242,7 +435,7 @@ tu_decode_plain(const void *buf, size_t rawlen, tu_doc_t *out)
 		raw += 4; rawlen -= 4; wide = 4; be = 1;
 	} else if (rawlen >= 3 && raw[0] == 0xEF && raw[1] == 0xBB &&
 	    raw[2] == 0xBF) {
-		raw += 3; rawlen -= 3; wide = 1;
+		skip = 3; wide = 1;
 	} else if (rawlen >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) {
 		raw += 2; rawlen -= 2; wide = 2;
 	} else if (rawlen >= 2 && raw[0] == 0xFE && raw[1] == 0xFF) {
@@ -251,18 +444,49 @@ tu_decode_plain(const void *buf, size_t rawlen, tu_doc_t *out)
 		wide = 1;
 	}
 
-	if (wide == 1) {
+	if (wide == 1 && plain_is_utf8(raw, rawlen)) {
 		/* Already UTF-8; count characters without rewriting.  A four byte
 		 * sequence is above the BMP and so stands for two UTF-16 units,
-		 * which is what the reference tool counts. */
-		text = xmalloc(rawlen + 1);
-		memcpy(text, raw, rawlen);
-		text[rawlen] = '\0';
-		for (size_t i = 0; i < rawlen; i += tu_utf8_seq((unsigned char *)text + i,
-		    rawlen - i))
+		 * which is what the reference tool counts.  Only a buffer that is
+		 * UTF-8 all the way through gets its mark dropped, which is why the
+		 * mark is counted here rather than in the table above. */
+		const unsigned char *p = raw + skip;
+		size_t n = rawlen - skip;
+
+		text = xmalloc(n + 1);
+		memcpy(text, p, n);
+		text[n] = '\0';
+		for (size_t i = 0; i < n; i += tu_utf8_seq((unsigned char *)text + i,
+		    n - i))
 			nchars += tu_utf8_seq((unsigned char *)text + i,
-			    rawlen - i) == 4 ? 2 : 1;
-		len = rawlen;
+			    n - i) == 4 ? 2 : 1;
+		len = n;
+	} else if (wide == 1) {
+		size_t n = rawlen;
+		int macroman;
+
+		/* One byte anywhere in the buffer that is not UTF-8 and is not
+		 * 0xA9, and then the reference tool reads all of it as Mac OS
+		 * Roman rather than repairing the good part: the valid é in
+		 * "a\c3\xa9\xe2b" comes back as √©, the two characters its own
+		 * bytes spell, and not as é.  So this is a whole buffer decision,
+		 * made before any of it is decoded. */
+		macroman = is_mac_roman(raw + skip, rawlen - skip);
+		if (skip != 0 && !macroman) {
+			/* A UTF-8 mark is not part of the text the 0xA9 rule is
+			 * judged on, and when that rule fires the mark is not part
+			 * of the result either, because then the text is just what
+			 * followed it.  With any other byte above 0x7F in it the
+			 * mark is only more text, and is read along with the rest. */
+			raw += skip;
+			n -= skip;
+		}
+		if (macroman) {
+			len = decode_mac_roman(raw, n, &text);
+			nchars = n;
+		} else {
+			len = decode_utf8_loose(raw, n, &text, &nchars);
+		}
 	} else {
 		/* Wide input: a surrogate pair in UTF-16 is one character, and a
 		 * lone surrogate has no UTF-8 form, so it is dropped. */

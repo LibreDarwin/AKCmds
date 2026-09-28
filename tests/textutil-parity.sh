@@ -96,6 +96,57 @@ mkfix() {
     printf '\xef\xbb\xbfHello\n' >"$d/bom8.txt"
     printf '\xff\xfeH\x00i\x00\n\x00' >"$d/bom16le.txt"
     printf '\xfe\xff\x00H\x00i\x00\n' >"$d/bom16be.txt"
+    # Buffers that are not UTF-8, which the reference tool reads as Mac OS Roman
+    # rather than repairing.  The whole buffer is the fallback, so the valid é
+    # in macutf8 comes back as the two Mac OS Roman characters its own bytes
+    # spell, and not as é, and a byte sequence that is one byte short of UTF-8
+    # is not the character it was reaching for either.
+    printf 'a\xc3\xa9\xe2b\n' >"$d/macutf8.txt"
+    printf 'a\x80\x81b\xffc3d\n' >"$d/macmix.txt"
+    # Every byte from 0x80 up, once with a line feed after each so that each one
+    # stands alone in the file, and once with none so that all 128 of them are
+    # one run.  0xA9 is the one byte the reference tool will not read as Mac OS
+    # Roman, and the two files pin both sides of that: it means © in the table,
+    # and it does read as © as soon as the file holds any other byte above 0x7F,
+    # so the 0xA9 on its own line of macall is © and not the U+FFFD that maca9,
+    # whose only bytes above 0x7F are 0xA9, gets for all three of its 0xA9.
+    : >"$d/macall.txt"
+    : >"$d/macrun.txt"
+    i=128
+    while [ "$i" -lt 256 ]; do
+        b=$(printf '\\%03o' "$i")
+        printf "$b\n" >>"$d/macall.txt"
+        printf "$b" >>"$d/macrun.txt"
+        i=$((i + 1))
+    done
+    printf '\xa9\xa9\xa9\n' >"$d/maca9.txt"
+    printf 'A\xa9A\n' >"$d/macquote.txt"
+    # A well formed sequence keeps 0xA9 from condemning the text, so a file that
+    # is ASCII, 0xA9 and valid UTF-8 and nothing else is read as UTF-8, and its
+    # 0xA9 bytes are the only thing in it that is repaired.  macutf8a9 is U+FFFD,
+    # ì and U+FFFD, and the well formed \303\254 in it is what keeps both 0xA9
+    # from being read from the table, so the two files pin both sides: macquote,
+    # which is the same text without the sequence, has the same two repairs, and
+    # macseq, which has a sequence one byte short of complete, is Mac OS Roman
+    # and spells all three of its own bytes: © é and nothing repaired.
+    printf '\xa9\xc3\xac\xa9\n' >"$d/macutf8a9.txt"
+    printf '\xa9\xc3\xa9\n' >"$d/macseq.txt"
+    # The overlong form is not a sequence at all, so it does not keep 0xA9 from
+    # condemning the text, and it is read from the table along with the byte
+    # beside it: 0xA9 0xC0 0x80 is © and ¿Ä.
+    printf '\xa9\xc0\x80\n' >"$d/macoverlong.txt"
+    # A UTF-8 mark in front of text that is not UTF-8.  The mark does not pick
+    # the encoding on its own: the whole buffer has to be UTF-8 for the mark to
+    # be dropped, and when it is not the mark is read as text along with
+    # everything else, so bommac has five characters and not the two its last
+    # two bytes spell.  The 0xA9 rule is the one thing weighed without the
+    # mark, and when it fires the mark goes with it, so boma9 is A and U+FFFD
+    # and not three Mac OS Roman characters.
+    printf '\xef\xbb\xbf\x80\x81' >"$d/bommac.txt"
+    printf '\xef\xbb\xbfA\xa9' >"$d/boma9.txt"
+    # A NUL and the control characters either side of a high byte, which reach
+    # the output as themselves in every format and are not dropped as text.
+    printf 'a\x00\x01\x07\x1b\x7f\x80z' >"$d/ctl.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
@@ -511,6 +562,21 @@ check_stdin "stdin wide html" "$S/wide" -convert html -stdin
 check_stdin "stdin cjk31 info" "$S/cjk31" -info -stdin
 check_stdin "stdin emoji31 info" "$S/emoji31" -info -stdin
 check_stdin "stdin emojilead info" "$S/emojilead" -info -stdin
+# The Mac OS Roman fallback, through -stdin, where the buffer arrives in a pipe
+# rather than from a file and so is not known to be a whole one.
+printf 'a\xc3\xa9\xe2b\n' >"$S/macutf8"
+printf 'A\xa9A\n' >"$S/macquote"
+i=128
+: >"$S/macrun"
+while [ "$i" -lt 256 ]; do
+    printf "$(printf '\\%03o' "$i")" >>"$S/macrun"
+    i=$((i + 1))
+done
+check_stdin "stdin macroman" "$S/macrun" -convert txt -stdin -stdout
+check_stdin "stdin macroman rtf" "$S/macrun" -convert rtf -stdin
+check_stdin "stdin macroman info" "$S/macrun" -info -stdin
+check_stdin "stdin whole buffer fallback" "$S/macutf8" -convert txt -stdin -stdout
+check_stdin "stdin quote run" "$S/macquote" -convert txt -stdin -stdout
 
 # ---------------------------------------------------------------------------
 # Usage, the default command, and argument errors.
@@ -608,7 +674,7 @@ PREP=''
 # ---------------------------------------------------------------------------
 for f in line2 nonl empty one eol1 eol2 two3 n29 n30 n31 n40 head30 amp \
          special blank wsonly indent tabs accent cjk bom8 bom16le bom16be \
-         crlf noext; do
+         crlf noext macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl; do
     check "info $f" -info "$f.txt"
 done
 check "info no extension" -info noext
@@ -644,7 +710,9 @@ check "info txt" -convert txt -output b2.txt line2.txt
 # ---------------------------------------------------------------------------
 for fmt in txt rtf html rtfd; do
     for f in line2 nonl empty one eol1 eol2 two3 n31 amp special blank \
-             wsonly indent tabs accent cjk bom8 bom16le bom16be crlf; do
+             wsonly indent tabs accent cjk bom8 bom16le bom16be crlf \
+             macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq \
+             macoverlong bommac boma9 ctl; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done
 done
@@ -852,7 +920,8 @@ done
 # ---------------------------------------------------------------------------
 for f in one nonl line2 empty eol1 eol2 two3 blank wsonly indent tabs \
          tabonly tabends special amp accent cjk crlf cronly crlfnl lfcr \
-         lfcrend ls ps lsonly psonly ls2 ps2; do
+         lfcrend ls ps lsonly psonly ls2 ps2 macutf8 macmix macall macrun \
+         maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl; do
     check "wordml $f" -convert wordml -output out "$f.txt"
 done
 # The output name the format asks for, with and without an -output, and to

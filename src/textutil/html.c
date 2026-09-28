@@ -196,54 +196,122 @@ enum space_where {
 	SPACE_BLANK,		/* the run is the whole of a blank line */
 };
 
-/* One run of n spaces.  A pair is a no-break space plus the space as typed, so
- * a run of four between two words gives NBSP+space+NBSP+space.  An odd run has
- * one space over, and that space is what tells the cases apart: at the head of a
- * line it becomes a no-break space and leads the span, so three spaces there
- * give NBSP+NBSP+space; between two words it is left as typed and falls outside
- * the span, so one space there is just a space; and at the end of a line it
- * moves past the pairs to close the span as a no-break space, so a run of two
+/* What a whitespace region does with its spaces, worked out before any of it is
+ * written.  The spaces fall into pairs, each pair a no-break space followed by
+ * the space as typed, and the odd one over is what tells the cases apart: at the
+ * head of a line it becomes a no-break space leading the span, so three spaces
+ * there give NBSP+NBSP+space; between two words it is left as typed and falls
+ * outside the span, so one space there is just a space; and at the end of a line
+ * it moves past the pairs to close the span as a no-break space, so a run of two
  * there gives a space followed by a span of one no-break space.  A line of
- * nothing but blanks closes the same way but keeps the no-break space that
- * would otherwise be a plain one, so two such spaces are both no-break. */
-static void
-emit_space_run(struct sink *s, size_t n, enum space_where where)
-{
-	size_t pairs = n / 2;
-	int odd = (int)(n % 2), closing = 0;
-	/* A run that closes a line keeps its last no-break space inside the span,
-	 * with the pairs in front of it.  On a line that has words on it the run
-	 * leaves one plain space outside the span first, and a blank line has no
-	 * such space to leave, so the two fill differently. */
-	int fill_plain = 0, fill_blank = 0;
+ * nothing but blanks closes the same way but keeps the no-break space that would
+ * otherwise be a plain one, so two such spaces are both no-break. */
+struct space_plan {
+	size_t pairs;		/* no-break space and space, repeated */
+	size_t extra;		/* no-break spaces written before the pairs */
+	size_t closing;		/* no-break space closing the span */
+	int literal;		/* a space left outside the span */
+	int inside;		/* whether any space falls inside the span */
+};
 
-	if (where == SPACE_MID && odd)
-		sink_put(s, " ", 1);		/* the lone space stays as typed */
-	if (where == SPACE_TAIL || where == SPACE_BLANK) {
-		closing = 1;
+/* The no-break space or the plain space that the i'th space inside the span
+ * becomes.  The pairs alternate, and anything counted apart from them is a
+ * no-break space, as is the one that closes the span. */
+static int
+space_is_breaks(const struct space_plan *pl, size_t i)
+{
+	if (i < pl->extra)
+		return 1;
+	if (i < pl->extra + 2 * pl->pairs)
+		return ((i - pl->extra) % 2) == 0;
+	return 1;
+}
+
+static void
+plan_space_run(size_t n, enum space_where where, struct space_plan *pl)
+{
+	int odd = (int)(n % 2);
+
+	pl->pairs = n / 2;
+	pl->extra = 0;
+	pl->closing = 0;
+	pl->literal = where == SPACE_MID && odd;
+	pl->inside = 0;
+
+	if (where == SPACE_LEAD && odd)
+		pl->extra = 1;		/* the leading space becomes no-break */
+	else if (where == SPACE_TAIL || where == SPACE_BLANK) {
+		pl->closing = 1;
 		if (!odd) {
-			fill_plain = where == SPACE_TAIL;
-			fill_blank = where == SPACE_BLANK;
-			pairs--;
+			if (where == SPACE_TAIL)
+				pl->literal = 1;	/* a plain space before the span */
+			else
+				pl->extra = 1;	/* a blank line keeps it no-break */
+			pl->pairs--;
 		}
 	}
-	if (where == SPACE_MID && pairs == 0)
-		return;			/* one space between two words */
+	pl->inside = pl->extra + 2 * pl->pairs + pl->closing > 0;
+}
 
-	if (fill_plain)
-		sink_put(s, " ", 1);
-	sink_str(s, "<span class=\"Apple-converted-space\">");
-	if (fill_blank)
-		sink_str(s, "\xc2\xa0");
-	if (where == SPACE_LEAD && odd)
-		sink_str(s, "\xc2\xa0");
-	for (size_t i = 0; i < pairs; i++) {
-		sink_str(s, "\xc2\xa0");
-		sink_put(s, " ", 1);
+/* One region of blanks and tabs, p[i] through p[j).  A tab keeps the place it
+ * was typed in and is written as a tab of its own, which the reference does too,
+ * but it is not a space, so it does not enter the pairs: it neither makes one
+ * more nor turns an odd run even.  A tab also moves the region off the head of
+ * its line, so a run that would have led a line is treated as one between two
+ * words instead, and a blank line that starts with a tab closes like a run at
+ * the end of a line rather than filling. */
+static void
+emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
+    enum space_where where, int *used_tab)
+{
+	struct space_plan pl;
+	size_t nspaces = 0, written = 0, inside = 0;
+	int open = 0;
+
+	for (size_t k = i; k < j; k++)
+		if (p[k] == ' ')
+			nspaces++;
+	if (i < j && p[i] == '\t') {
+		if (where == SPACE_LEAD)
+			where = SPACE_MID;
+		else if (where == SPACE_BLANK)
+			where = SPACE_TAIL;
 	}
-	if (closing)
-		sink_str(s, "\xc2\xa0");
-	sink_str(s, "</span>");
+	plan_space_run(nspaces, where, &pl);
+
+	for (size_t k = i; k < j; k++) {
+		if (p[k] == '\t') {
+			/* the tab is inside the span once a space of the span has
+			 * been written, and it is left there after the last */
+			if (inside > 0 && !open) {
+				sink_str(s, "<span class=\"Apple-converted-space\">");
+				open = 1;
+			}
+			sink_str(s, "<span class=\"Apple-tab-span\">\t</span>");
+			*used_tab = 1;
+			continue;
+		}
+		if (pl.literal && written == 0) {
+			if (open) {
+				sink_str(s, "</span>");
+				open = 0;
+			}
+			sink_put(s, " ", 1);
+			written++;
+			continue;
+		}
+		if (!pl.inside)
+			continue;	/* a single space between two words */
+		if (!open) {
+			sink_str(s, "<span class=\"Apple-converted-space\">");
+			open = 1;
+		}
+		sink_str(s, space_is_breaks(&pl, inside) ? "\xc2\xa0" : " ");
+		inside++;
+		written++;
+	}
+	if (open)
+		sink_str(s, "</span>");
 }
 
 /* One paragraph's worth of line content.  Sets *used_tab when a tab was
@@ -262,11 +330,11 @@ emit_line_body(struct sink *s, const char *p, size_t n, int *used_tab)
 	while (i < n) {
 		unsigned char c = (unsigned char)p[i];
 
-		if (c == ' ') {
+		if (c == ' ' || c == '\t') {
 			size_t j = i;
 			enum space_where where;
 
-			while (j < n && p[j] == ' ')
+			while (j < n && (p[j] == ' ' || p[j] == '\t'))
 				j++;
 			if (i == 0 && j == n)
 				where = SPACE_BLANK;
@@ -276,14 +344,10 @@ emit_line_body(struct sink *s, const char *p, size_t n, int *used_tab)
 				where = SPACE_TAIL;
 			else
 				where = SPACE_MID;
-			emit_space_run(s, j - i, where);
+			emit_space_region(s, p, i, j, where, used_tab);
 			i = j;
 		} else if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
 			i++;		/* a control of no account to the writer */
-		} else if (c == '\t') {
-			sink_str(s, "<span class=\"Apple-tab-span\">\t</span>");
-			*used_tab = 1;
-			i++;
 		} else {
 			emit_escaped(s, &p[i], 1);
 			i++;

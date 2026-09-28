@@ -208,7 +208,13 @@ emit_space_run(struct sink *s, size_t n, int at_end)
 }
 
 /* One paragraph's worth of line content.  Sets *used_tab when a tab was
- * written, because that adds a rule to the stylesheet. */
+ * written, because that adds a rule to the stylesheet.
+ *
+ * The C0 controls are dropped here rather than before the line was measured,
+ * because a line of nothing but controls is not a blank line to the reference
+ * tool: it asks for a class of its own and writes a paragraph that is empty
+ * once the controls are gone.  Only tab, line feed and carriage return are text
+ * of their own, and U+007F is kept. */
 static void
 emit_line_body(struct sink *s, const char *p, size_t n, int *used_tab)
 {
@@ -224,6 +230,10 @@ emit_line_body(struct sink *s, const char *p, size_t n, int *used_tab)
 		i = j;
 	}
 	for (; i < n; i++) {
+		unsigned char c = (unsigned char)p[i];
+
+		if (c < 0x20 && c != '\t' && c != '\n' && c != '\r')
+			continue;
 		if (p[i] == '\t') {
 			sink_str(s, "<span class=\"Apple-tab-span\">\t</span>");
 			*used_tab = 1;

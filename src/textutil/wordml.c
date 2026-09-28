@@ -80,6 +80,24 @@ wml_text(FILE *f, const char *p, size_t n)
 	}
 }
 
+/* The text of a run, which is the body with the C0 controls dropped: all but
+ * the three that are text in their own right, tab, line feed and carriage
+ * return.  U+007F is kept.  This is done on the way out rather than before the
+ * text was split into paragraphs, because a control is not a paragraph mark and
+ * cannot bring a paragraph about, but it is not text either and must not be
+ * written. */
+static void
+wml_body_text(FILE *f, const char *p, size_t n)
+{
+	for (size_t i = 0; i < n; i++) {
+		unsigned char c = (unsigned char)p[i];
+
+		if (c < 0x20 && c != '\t' && c != '\n' && c != '\r')
+			continue;
+		wml_text(f, &p[i], 1);
+	}
+}
+
 static void
 wml_meta_group(FILE *f, const tu_meta_t *m)
 {
@@ -128,6 +146,8 @@ wml_run(FILE *f, const char *p, size_t n)
 
 		if (p[i] == '\t') {
 			elem = "<w:tab/>";
+		} else if (p[i] == '\f') {
+			elem = "<w:br w:type=\"page\"/>";
 		} else if (p[i] == (char)0xE2 && n - i >= 3 &&
 		    (unsigned char)p[i + 1] == 0x80 &&
 		    (unsigned char)p[i + 2] == 0xA8) {
@@ -142,14 +162,14 @@ wml_run(FILE *f, const char *p, size_t n)
 		if (elem == NULL)
 			continue;
 		fputs("<w:t>", f);
-		wml_text(f, p + start, i - start);
+		wml_body_text(f, p + start, i - start);
 		fputs("</w:t>", f);
 		fputs(elem, f);
 		i += width - 1;
 		start = i + 1;
 	}
 	fputs("<w:t>", f);
-	wml_text(f, p + start, n - start);
+	wml_body_text(f, p + start, n - start);
 	fputs("</w:t>", f);
 }
 
@@ -206,11 +226,13 @@ tu_write_wordml(const tu_doc_t *d, const char *path,
 	fputs("<w:docPr></w:docPr>", f);
 	fputs("<w:body><wx:sect>", f);
 
+	/* The paragraphs come from the text as it came in, so the control
+	 * characters that are dropped are dropped inside the run rather than
+	 * before the text was split up.  A document of nothing is a paragraph
+	 * and nothing else: no pPr, no run, and no w:t, which is the one place
+	 * the body is not what the loop below writes for the same text. */
 	p = d->text != NULL ? d->text : "";
 	len = d->len;
-	/* A document with nothing in it is a paragraph and nothing else: no
-	 * pPr, no run, and no w:t, which is the one place the body is not
-	 * what the loop below would write for the same text. */
 	if (len == 0) {
 		fputs("<w:p></w:p>", f);
 	} else {

@@ -147,6 +147,17 @@ mkfix() {
     # A NUL and the control characters either side of a high byte, which reach
     # the output as themselves in every format and are not dropped as text.
     printf 'a\x00\x01\x07\x1b\x7f\x80z' >"$d/ctl.txt"
+    # A run of blanks is rebuilt by the HTML writer a pair at a time, so where
+    # the run sits in its line decides what the odd space left over becomes: a
+    # no-break space at the head of the line, a space as typed between two
+    # words, and a no-break space past the pairs at the end of the line.  spcrun
+    # has a run of each width in each of the three places, and the single space
+    # between two words is in it because that one is not rebuilt at all.
+    printf '   A\nA   \nA   B\nA B\n  A  B  \n' >"$d/spcrun.txt"
+    # A line of nothing but blanks is a paragraph of its own class rather than a
+    # break, and it closes like a run at the end of a line does but keeps the
+    # no-break space that on a line with words would fall outside the span.
+    printf 'A\n  \n   \nB\n' >"$d/spcblank.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
@@ -674,7 +685,7 @@ PREP=''
 # ---------------------------------------------------------------------------
 for f in line2 nonl empty one eol1 eol2 two3 n29 n30 n31 n40 head30 amp \
          special blank wsonly indent tabs accent cjk bom8 bom16le bom16be \
-         crlf noext macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl; do
+         crlf noext macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl spcrun spcblank; do
     check "info $f" -info "$f.txt"
 done
 check "info no extension" -info noext
@@ -712,7 +723,7 @@ for fmt in txt rtf html rtfd; do
     for f in line2 nonl empty one eol1 eol2 two3 n31 amp special blank \
              wsonly indent tabs accent cjk bom8 bom16le bom16be crlf \
              macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq \
-             macoverlong bommac boma9 ctl; do
+             macoverlong bommac boma9 ctl spcrun spcblank; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done
 done
@@ -921,7 +932,7 @@ done
 for f in one nonl line2 empty eol1 eol2 two3 blank wsonly indent tabs \
          tabonly tabends special amp accent cjk crlf cronly crlfnl lfcr \
          lfcrend ls ps lsonly psonly ls2 ps2 macutf8 macmix macall macrun \
-         maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl; do
+         maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl spcrun spcblank; do
     check "wordml $f" -convert wordml -output out "$f.txt"
 done
 # The output name the format asks for, with and without an -output, and to

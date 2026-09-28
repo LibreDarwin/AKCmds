@@ -16,7 +16,7 @@
 # helper, so python3 is not needed here.
 #
 # Scope.  This harness covers the plain text surface: the option parser, -info,
-# and the txt, rtf, rtfd and html writers.  The doc, docx, odt, wordml and
+# and the txt, rtf, rtfd, html and wordml writers.  The doc, docx, odt and
 # webarchive writers are recognised by the parser so that the option surface
 # matches, but are not written by this port, so they are not compared here; see
 # src/textutil/NOTES.md.
@@ -97,6 +97,27 @@ mkfix() {
     printf '\xff\xfeH\x00i\x00\n\x00' >"$d/bom16le.txt"
     printf '\xfe\xff\x00H\x00i\x00\n' >"$d/bom16be.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
+    # A lone carriage return between two lines, which is a paragraph mark of
+    # its own, and the two Unicode line and paragraph separators.  U+2028
+    # ends a line inside a paragraph and U+2029 ends the paragraph, so these
+    # are the same bytes as crlf.txt with one separator changed and one with
+    # each of the two kinds on its own.  A line feed followed by a carriage
+    # return is two marks where a carriage return followed by a line feed is
+    # one, so lfcr and crlf are the pair that tells the two apart.
+    printf 'one\rtwo\n' >"$d/cronly.txt"
+    printf 'a\n\rb\n' >"$d/lfcr.txt"
+    printf 'a\r\nb\n' >"$d/crlfnl.txt"
+    printf 'a\n\r' >"$d/lfcrend.txt"
+    printf 'a\xe2\x80\xa8b\n' >"$d/ls.txt"
+    printf 'a\xe2\x80\xa9b\n' >"$d/ps.txt"
+    printf '\xe2\x80\xa8' >"$d/lsonly.txt"
+    printf '\xe2\x80\xa9' >"$d/psonly.txt"
+    printf 'a\xe2\x80\xa8\xe2\x80\xa8b\n' >"$d/ls2.txt"
+    printf 'a\xe2\x80\xa9\xe2\x80\xa9b\n' >"$d/ps2.txt"
+    # A tab on its own, and one at each end of a line, so that the empty text
+    # either side of a tab is written rather than skipped.
+    printf '\t\n' >"$d/tabonly.txt"
+    printf 'a\t\n\tb\n' >"$d/tabends.txt"
     # A subdirectory, so that output naming can be checked for a path.
     mkdir -p "$d/sub"
     printf 'nested\n' >"$d/sub/n.txt"
@@ -713,7 +734,8 @@ for opt in -strip -noload -nostore; do
 done
 check "accepted encoding" -convert txt -encoding UTF-8 line2.txt
 check "accepted inputencoding" -convert txt -inputencoding UTF-8 line2.txt
-check "accepted format" -convert txt -format txt line2.txtcheck "accepted creationtime" -convert txt -creationtime 2026-01-02T03:04:05Z line2.txt
+check "accepted format" -convert txt -format txt line2.txt
+check "accepted creationtime" -convert txt -creationtime 2026-01-02T03:04:05Z line2.txt
 check "accepted modificationtime" -convert txt -modificationtime 2026-01-02T03:04:05Z line2.txt
 check "accepted keywords" -convert txt -keywords "(a, b)" line2.txt
 check "accepted prefixspaces" -convert html -prefixspaces 2 line2.txt
@@ -752,7 +774,7 @@ check "still rejects unknown" -convert wibble
 # half leaves out html and webarchive, for the same reason read rather than
 # written.  Both are recorded in src/textutil/NOTES.md.
 # ---------------------------------------------------------------------------
-for fmt in TXT Txt rtf RTF Rtfd HTML; do
+for fmt in TXT Txt rtf RTF Rtfd HTML wordml WordML; do
     check "case insensitive -convert $fmt" -convert "$fmt" line2.txt
 done
 for fmt in TXT Txt rtf RTF Rtfd doc DOCX odt ODT wordml WordML; do
@@ -822,6 +844,72 @@ for n in 9 30 1033 4x; do
     check "accepted -encoding number $n info" -encoding "$n" -info line2.txt
 done
 
+# ---------------------------------------------------------------------------
+# The wordml writer.  The document is one long line with no newline at the end
+# of it, so every byte of it is compared, including the two processing
+# instructions, the namespace list and the fact that the body begins on the
+# same line as the opening tag.
+# ---------------------------------------------------------------------------
+for f in one nonl line2 empty eol1 eol2 two3 blank wsonly indent tabs \
+         tabonly tabends special amp accent cjk crlf cronly crlfnl lfcr \
+         lfcrend ls ps lsonly psonly ls2 ps2; do
+    check "wordml $f" -convert wordml -output out "$f.txt"
+done
+# The output name the format asks for, with and without an -output, and to
+# standard output.
+check "wordml default name" -convert wordml one.txt
+check "wordml stdout" -convert wordml -stdout one.txt
+check "wordml cat" -cat wordml -output out line2.txt
+check "wordml extension" -convert wordml -extension xml one.txt
+check "wordml into a subdirectory" -convert wordml -output sub/out one.txt
+# The three characters that mean something to the markup, in a document, in a
+# title and in a name, and a quote and an apostrophe beside them, which are
+# written as themselves in the text of a document.
+check "wordml escapes" -convert wordml -output out amp.txt
+check "wordml escape title" -convert wordml -title 'a<b&c>d"e' -output out one.txt
+check "wordml quote and apostrophe" -convert wordml -output out -title "a'b\"c" one.txt
+# The font the run names is the one -font resolves to, and the size is in half
+# points, so both a default and an odd size are checked.
+for fn in Helvetica "Arial Bold" Avenir "Times New Roman" "Courier New" \
+          wibble; do
+    check "wordml font $fn" -convert wordml -font "$fn" -output out one.txt
+done
+for s in 1 7 12 18 72; do
+    check "wordml fontsize $s" -convert wordml -fontsize "$s" -output out one.txt
+    check "wordml font and size $s" -convert wordml -font Avenir -fontsize "$s" \
+        -output out one.txt
+done
+# The document is written in UTF-8 whatever the text was decoded from, so
+# nothing is refused for an encoding and the characters are written as bytes.
+for e in utf8 utf-16 utf-16le utf-16be utf-32; do
+    check "wordml -encoding $e" -convert wordml -encoding "$e" -output out cjk.txt
+done
+check "wordml -encoding refused name" -convert wordml -encoding nope \
+    -output out one.txt
+# A document is a run of paragraphs, and the marks that end one are a carriage
+# return, a line feed, the two together, and U+2029.  A mark at the end of the
+# document does not begin another paragraph, so these are the shapes the loop
+# over them has to get right.
+for f in eol1 eol2 two3 crlf cronly crlfnl lfcr lfcrend ls2 ps2 empty; do
+    check "wordml paragraphs $f" -convert wordml -output out "$f.txt"
+    check "wordml paragraphs $f stdout" -convert wordml -stdout "$f.txt"
+done
+# A destination that cannot be written, and a document that cannot be read, are
+# refused in the words the other writers use.
+PREP='chmod 500 rodir'
+check "wordml into a read only directory" -convert wordml -output rodir/out one.txt
+PREP=''
+check "wordml from a missing file" -convert wordml -output out nosuchfile
+check "wordml from a directory" -convert wordml -output out adir
+# A document read as plain text has no page setup and no default tab stop, which
+# is what the empty w:sectPr and the empty w:docPr are.  A document read as RTF
+# or as HTML gets the page setup, the default tab stop, the paragraph spacing
+# and the resolved default font of the reader that read it, none of which this
+# port's readers record: the same gap shows up in rtf to rtf conversion.  So
+# only the plain text cases above are compared here, for the same reason the
+# office containers are not; see src/textutil/NOTES.md.
+PREP=''
+
 # The metadata options.  Each one opens the info group between the envelope and
 # the paragraph, and the group is written for an empty value too: an empty
 # -title is an empty title, not no title.
@@ -831,14 +919,24 @@ for f in title author subject comment editor company; do
     check "-$f rtfd" -convert rtfd -"$f" "value" -output out line2.txt
     check "-$f html" -convert html -"$f" "value" -output out line2.txt
     check "-$f txt" -convert txt -"$f" "value" -output out line2.txt
+    check "-$f wordml" -convert wordml -"$f" "value" -output out line2.txt
+    check "-$f wordml empty" -convert wordml -"$f" "" -output out line2.txt
 done
 # The fields are written in one order whatever order they are given in, and
 # that order is not the order of the usage message.
 check "info group order" -convert rtf -company C -editor E -comment M \
     -subject S -author A -title T -output out line2.txt
+check "info group order wordml" -convert wordml -company C -editor E \
+    -comment M -subject S -author A -title T -output out line2.txt
 check "info group repeated" -convert rtf -title one -title two -output out line2.txt
 check "info group with empty document" -convert rtf -title T -output out zero
+check "info group with empty document wordml" -convert wordml -title T \
+    -output out empty.txt
 check "info group without a document" -convert rtf -title T -output out nosuchfile
+check "info group without a document wordml" -convert wordml -title T \
+    -output out nosuchfile
+check "info group wordml times" -convert wordml -creationtime 2024-01-02T03:04:05Z \
+    -modificationtime 2024-01-02T03:04:05Z -output out line2.txt
 
 # A value is escaped for RTF: the three characters with a meaning of their own,
 # and then everything above ASCII.  The code page 1252 characters are written as

@@ -384,18 +384,64 @@ applies to what is shown in front of the separator, so a long paragraph is cut
 at 30 units and then marked. A `U+2029` paragraph separator is treated the same
 way, since RTF writes paragraphs with it.
 
+## WordML: a fixed envelope, and paragraphs that are separated three ways
+
+`wordml` is a single line. Two processing instructions, the opening
+`w:wordDocument` tag with its fourteen namespace declarations, then the body on
+the *same* line as the tag, and no newline at the end of the file. Nothing in
+the envelope varies, and the document's own font never reaches the `w:fonts`
+table, which names Times New Roman in all four slots every time.
+
+The shape of the body is the interesting part. A document is a run of
+paragraphs, and the marks that end one are a carriage return, a line feed, a
+carriage return and a line feed *in that order* as one mark, and `U+2029`; a
+line feed followed by a carriage return is two marks and writes an empty
+paragraph between them. A mark at the very end does not begin another paragraph,
+so a document that ends in one does not gain an empty one, while a document of
+two newlines is two empty paragraphs. Inside a paragraph a tab is `<w:tab/>` and
+`U+2028` is `<w:br/>`, and the text either side of either is wrapped in a `w:t`
+**whether or not it is empty**, so a paragraph that is nothing but a tab is an
+empty `w:t`, the tab, and another empty `w:t`. Only a document with no text at
+all is different: it is a bare `<w:p></w:p>`, with no `w:pPr` and no run.
+
+The escaping is the three characters with a meaning of their own and nothing
+else, so `>` is written `&gt;` and a quote is written as itself. The metadata
+group is `o:`-prefixed and in a fixed order, `-keywords` being the one option
+that is not usable: the reference tool mishandles every form of it. The run
+properties are `w:rFonts`, `wx:font`, `w:sz`, `w:sz-cs`, then bold and italic,
+with the size in half-points and the family the one `-font` resolves to. Bold
+before italic is the opposite of the order RTF writes them in.
+
+`-convert wordml in.txt` with no `-output` writes `in.xml`: wordml is the one
+format whose name is not the extension an output file of it is given.
+
+The one thing this writer cannot reproduce is anything the *reader* recorded
+about the document rather than its text; see the divergences below.
+
 ## Divergences
 
 These are the known points where this port does not do what the reference tool
 does. Most of them are a missing feature rather than a difference in output for
 a feature that exists on both sides.
 
-- **The office containers are not written.** `doc`, `docx`, `odt`, `wordml`
-  and `webarchive` are recognised by the parser, and `-convert` with one of
-  them produces no file and a message naming the format. The reference tool
-  writes all four office containers. This is the largest gap; the harness's
+- **The remaining office containers are not written.** `doc`, `docx`, `odt` and
+  `webarchive` are recognised by the parser, and `-convert` with one of them
+  produces no file and a message naming the format. The reference tool writes
+  all three office containers. This is the largest remaining gap; the harness's
   `recognised $fmt` cases pin the *parse* only, since a case that ran one of
   these writers would be testing the writer rather than the parser.
+- **A document's readers do not record its layout, so a document read as RTF
+  or as HTML loses it.** The reference tool keeps what a rich text reader
+  learned — the resolved default font (`Times` for HTML, `Helvetica` for RTF,
+  against the `Helvetica Light` a plain text document gets), the page size and
+  margins in an `RTF` `w:sectPr`, a `w:defaultTabStop`, and the paragraph
+  spacing an HTML reader applies. `tu_doc_t` holds the text and nothing else,
+  so those run properties are written from the `-font` and `-fontsize` options
+  and `w:sectPr` and `w:docPr` are empty whatever was read. The same gap shows
+  up converting RTF to RTF, where the font table names the port's default
+  instead of the document's, so it is a gap in the readers rather than in the
+  wordml writer. A document read as plain text is unaffected, and is what the
+  harness's wordml cases compare.
 - **`webarchive` is not read.** The reference tool reads a webarchive as an
   archive of a web page and reports its title and its text. Reading one needs
   a binary property list reader, which this port does not have, so a file with
@@ -412,6 +458,15 @@ a feature that exists on both sides.
   Notably the reference tool's single byte encodings succeed on ASCII-only
   input and produce bytes identical to UTF-8, so this only shows on text that
   is not ASCII.
+- **Bytes that are not valid UTF-8 are read as Mac OS Roman.** The reference
+  tool decodes plain text as UTF-8 and falls back to Mac OS Roman for a byte
+  sequence that is not valid UTF-8, then writes the result as UTF-8, so
+  `printf 'a\xe2b'` comes back as `a‚b` (U+201A). This port passes such bytes
+  through unchanged, which shows in every writer rather than in the wordml one
+  alone: `txt`, `rtf`, `html` and `wordml` all differ on such input. The
+  mapping is the ordinary Mac OS Roman table, so this is a small, well defined
+  reader change rather than an open question, and it is not made here because it
+  belongs to the plain text reader and not to any writer.
 - **`-inputencoding` is accepted and ignored.** The reference tool decodes
   with it, and reports `Text encoding ... isn't applicable` for input the named
   encoding cannot represent.
@@ -437,16 +492,23 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 733 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 835 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
 error cases, `-info` including the preview and BOM fixtures, `-stdin`, the
-`-cat` and `-convert` paths, all four writers, `-encoding` across the Unicode
+`-cat` and `-convert` paths, all five writers, `-encoding` across the Unicode
 family, `-format` validation and forcing, the read and write diagnostics, and
 the destination edge cases: a missing parent, an unwritable parent, a parent
 that is a file, a destination that is a directory, a bundle onto a directory
 and onto a file, spaces in names, and a file whose name looks like an option.
+
+The wordml cases take each fixture through the writer: the paragraph marks and
+separators, both orders of a carriage return and a line feed, tabs at each end
+of a line and on their own, the three characters escaped and the quote that is
+not, the empty document, both metadata times, the font families and the sizes in
+half-points, and the naming of an output with no `-output` at all. They are plain
+text inputs, for the reason given in the divergences above.
 
 The readers are covered at the end of the suite. Each reads a file that was
 written once by the reference tool into a template, which every case then

@@ -225,6 +225,8 @@ int tu_write_rtfd(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);
 int tu_write_html(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta, tu_encoding_t enc);
+int tu_write_wordml(const tu_doc_t *d, const char *path,
+    const tu_style_t *st, const tu_meta_t *meta);
 
 /* The -font database, shared by the writers that resolve one.  See
  * src/textutil/font.c. */

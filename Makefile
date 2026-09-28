@@ -40,7 +40,8 @@ TIFF2ICNS_OBJS := $(OBJDIR)/tiff2icns.o
 TEXTUTIL_BIN := $(BUILD_DIR)/textutil
 TEXTUTIL_OBJS := $(OBJDIR)/textutil_main.o $(OBJDIR)/textutil_txt.o \
 	$(OBJDIR)/textutil_rtf.o $(OBJDIR)/textutil_rtfd.o \
-	$(OBJDIR)/textutil_html.o $(OBJDIR)/textutil_info.o \
+	$(OBJDIR)/textutil_html.o $(OBJDIR)/textutil_wordml.o \
+	$(OBJDIR)/textutil_info.o \
 	$(OBJDIR)/textutil_format.o $(OBJDIR)/textutil_io.o \
 	$(OBJDIR)/textutil_font.o $(OBJDIR)/textutil_usage.o
 
@@ -115,6 +116,10 @@ $(OBJDIR)/textutil_rtfd.o: src/textutil/rtfd.c
 $(OBJDIR)/textutil_html.o: src/textutil/html.c
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ src/textutil/html.c
+
+$(OBJDIR)/textutil_wordml.o: src/textutil/wordml.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/wordml.c
 
 $(OBJDIR)/textutil_info.o: src/textutil/info.c
 	@mkdir -p $(OBJDIR)

@@ -411,9 +411,9 @@ write_output(tu_fmt_t fmt, const tu_doc_t *d, const char *path,
 	}
 	/* A single byte encoding needs a conversion table this port does not
 	 * carry, and writing UTF-8 in its place would be a silent answer to a
-	 * question that was not asked.  RTF and RTFD are 7-bit by construction,
-	 * so the reference tool leaves them in ASCII whatever was asked for, and
-	 * nothing is declined there. */
+	 * question that was not asked.  RTF, RTFD and wordml are written in
+	 * UTF-8 whatever the text was decoded from, and the reference tool
+	 * leaves them there, so nothing is declined for them. */
 	if (enc == TU_ENC_UNSUPPORTED && (fmt == FMT_TXT || fmt == FMT_HTML)) {
 		fprintf(stderr, "textutil: -encoding %s is not implemented\n",
 		    enc_given);
@@ -428,6 +428,8 @@ write_output(tu_fmt_t fmt, const tu_doc_t *d, const char *path,
 		return tu_write_html(d, path, st, m, enc);
 	case FMT_RTFD:
 		return tu_write_rtfd(d, path, st, m);
+	case FMT_WORDML:
+		return tu_write_wordml(d, path, st, m);
 	default:
 		/* Recognised so that the parser matches, but not written by this
 		 * port; see src/textutil/NOTES.md. */

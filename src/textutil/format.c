@@ -29,7 +29,9 @@ static const struct {
 	[FMT_DOC]       = { "doc",       "doc",       "Word format" },
 	[FMT_DOCX]      = { "docx",      "docx",      "Office Open XML format" },
 	[FMT_ODT]       = { "odt",       "odt",       "Open Document format" },
-	[FMT_WORDML]    = { "wordml",    "wordml",    "Word XML format" },
+	/* wordml is the one format whose name is not the extension an output
+	 * file of it is given: -convert wordml writes in.xml. */
+	[FMT_WORDML]    = { "wordml",    "xml",       "Word XML format" },
 	[FMT_WEBARCHIVE]= { "webarchive","webarchive","web archive" },
 };
 

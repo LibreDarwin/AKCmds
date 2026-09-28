@@ -43,7 +43,8 @@ TEXTUTIL_OBJS := $(OBJDIR)/textutil_main.o $(OBJDIR)/textutil_txt.o \
 	$(OBJDIR)/textutil_html.o $(OBJDIR)/textutil_wordml.o \
 	$(OBJDIR)/textutil_info.o \
 	$(OBJDIR)/textutil_format.o $(OBJDIR)/textutil_io.o \
-	$(OBJDIR)/textutil_font.o $(OBJDIR)/textutil_usage.o
+	$(OBJDIR)/textutil_font.o $(OBJDIR)/textutil_usage.o \
+	$(OBJDIR)/textutil_bidi.o
 
 TOPS_BIN := $(BUILD_DIR)/tops
 TOPS_OBJS := $(OBJDIR)/tops.o
@@ -140,6 +141,10 @@ $(OBJDIR)/textutil_io.o: src/textutil/io.c
 $(OBJDIR)/textutil_usage.o: src/textutil/usage.c
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ src/textutil/usage.c
+
+$(OBJDIR)/textutil_bidi.o: src/textutil/bidi.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/bidi.c
 
 $(TOPS_BIN): $(TOPS_OBJS)
 	@mkdir -p $(BUILD_DIR)

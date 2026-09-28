@@ -213,6 +213,15 @@ size_t tu_utf8_seq(const unsigned char *p, size_t avail);
  * it in txt.c for how much of a bad sequence it swallows. */
 unsigned long tu_utf8_strict(const unsigned char *p, size_t avail, size_t *width);
 
+/* The direction of a line of text, for the writers that record which way it
+ * reads: 1 when the first character that has a direction of its own is written
+ * right to left, 0 otherwise, since a line with no such character reads left to
+ * right.  The number of bytes to drop from the head of a line, which is a mark
+ * that only tells a reader which way to read rather than text the reader is to
+ * be shown.  See src/textutil/bidi.c. */
+unsigned long tu_bidi_first(const unsigned char *p, size_t n);
+size_t tu_bidi_mark(const unsigned char *p, size_t n);
+
 /* Writers.  Each returns 0 on success and -1 on failure, having already
  * reported the reason to stderr.  -encoding applies to the text and HTML
  * writers, which hold their whole output in memory and so encode it just

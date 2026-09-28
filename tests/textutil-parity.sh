@@ -168,6 +168,20 @@ mkfix() {
     # sit, and the runs of a blank line with and without a leading tab.
     printf '  A\nA  \n A \nA B\nA  B\n  A  \n \t \n\t \n\t  \nA\t\tB\n' \
         >"$d/spctab.txt"
+    # A line is written with dir="rtl" when the first character in it that
+    # carries a direction of its own is written right to left.  A letter of the
+    # left to right kind ahead of one of the other kind settles the line then
+    # and there, and the digits and marks ahead of one settle nothing.  A left
+    # or right to left mark at the head of a line is left out of the line and is
+    # what gave the line its direction, so a line of one mark and one space is a
+    # blank line, and a line of two marks keeps the second of them.  A line of
+    # nothing but a mark is an empty line, and bidionly and bidiend are the two
+    # ends of the text that an empty line is not a line: with no terminator
+    # closing it, the last one is not written at all.
+    printf '\xd7\x90\nA\xd7\x90\n\xd7\x90A\n\xe2\x80\x8fA\n\xe2\x80\x8eA\nA\xe2\x80\x8f\n\xe2\x80\x8f\rA\n\xe2\x80\x8f\xe2\x80\x8fA\n\xe2\x80\x8f \n1.\xd7\x90\n\xd9\xa1\n' \
+        >"$d/bidi.txt"
+    printf '\xe2\x80\x8f' >"$d/bidionly.txt"
+    printf 'A\r\xe2\x80\x8f' >"$d/bidiend.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
@@ -736,6 +750,16 @@ for fmt in txt rtf html rtfd; do
              macoverlong bommac boma9 ctl spcrun spcblank spctab; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done
+done
+
+# Which way a line reads is a question the HTML writer answers for itself, and
+# the HTML writer is the only one held to the reference's answer here: the RTF
+# and WordML writers say a line reads right to left only when the text named it
+# with a mark, and a byte order mark is taken off the head of the text by the
+# reader of the text rather than by each writer.  So the three shapes that
+# settle all of this are checked against the HTML writer alone.
+for f in bidi bidionly bidiend; do
+    check "convert html $f" -convert html "$f.txt"
 done
 
 # ---------------------------------------------------------------------------

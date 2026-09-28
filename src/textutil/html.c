@@ -412,26 +412,47 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	 * close before <body> can open. */
 	while (n < want) {
 		size_t adv, linelen = line_at(text, len, pos, &adv);
-		int blank = 1, fmt, c;
+		size_t mark, shown;
+		int blank = 1, fmt, c, rtl, drop;
 
-		for (size_t k = 0; k < linelen; k++)
+		/* A line that begins with a mark saying which way to read is written
+		 * with the mark left out and, since the mark is what named the
+		 * direction, that of the line as it was before the mark went.  A line
+		 * that was nothing but the mark is then empty, and is written as the
+		 * empty line is, unless it is the last line and there is no terminator
+		 * to close it: a mark that leaves the last line empty takes that line
+		 * away with it, as a trailing terminator would not open it. */
+		rtl = tu_bidi_first((const unsigned char *)text + pos, linelen) != 0;
+		mark = tu_bidi_mark((const unsigned char *)text + pos, linelen);
+		shown = linelen - mark;
+		drop = shown == 0 && pos + linelen >= len;
+
+		/* Whether the line is blank is asked of what is left of it, the mark
+		 * not being something the reader is shown and so not room the line
+		 * takes up: a line of one mark and one space is a blank line. */
+		for (size_t k = mark; k < linelen; k++)
 			if (text[pos + k] != ' ' && text[pos + k] != '\t') {
 				blank = 0;
 				break;
 			}
 		fmt = blank ? 1 : 0;
-		if (cls[fmt] == 0)
-			cls[fmt] = ++ncls;
-		c = cls[fmt];
+		if (!drop) {
+			if (cls[fmt] == 0)
+				cls[fmt] = ++ncls;
+			c = cls[fmt];
 
-		sink_str(&body, "<p class=\"p");
-		sink_put(&body, (const char *)&(char){ (char)('0' + c) }, 1);
-		if (linelen == 0) {
-			sink_str(&body, "\"><br></p>\n");
-		} else {
-			sink_str(&body, "\">");
-			emit_line_body(&body, text + pos, linelen, &used_tab);
-			sink_str(&body, "</p>\n");
+			sink_str(&body, "<p");
+			if (rtl)
+				sink_str(&body, " dir=\"rtl\"");
+			sink_str(&body, " class=\"p");
+			sink_put(&body, (const char *)&(char){ (char)('0' + c) }, 1);
+			if (shown == 0) {
+				sink_str(&body, "\"><br></p>\n");
+			} else {
+				sink_str(&body, "\">");
+				emit_line_body(&body, text + pos + mark, shown, &used_tab);
+				sink_str(&body, "</p>\n");
+			}
 		}
 		pos += adv;
 		n++;

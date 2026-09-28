@@ -35,41 +35,6 @@
 /* The preview cut, in UTF-16 code units. */
 #define PREVIEW_UNITS 30
 
-/* Decide the type of a file for -info.  A name the tool can read decides it,
- * and beats what the bytes look like; otherwise the first few bytes do.  The
- * formats with no reader here are not named, so a file called .doc is read as
- * what it holds. */
-static tu_fmt_t
-detect(const char *path, const struct stat *st, const char *head, size_t headlen)
-{
-	const char *dot = strrchr(path, '.');
-
-	/* A directory is an RTFD bundle because of what it is called.  What it
-	 * holds decides whether it can be read, not what it is. */
-	if (S_ISDIR(st->st_mode))
-		return dot != NULL && strcasecmp(dot, ".rtfd") == 0 ?
-		    FMT_RTFD : FMT_TXT;
-	if (dot != NULL) {
-		switch (tu_fmt_parse(dot + 1)) {
-		case FMT_TXT:
-		case FMT_RTF:
-		case FMT_HTML:
-		case FMT_WEBARCHIVE:
-			return (tu_fmt_t)tu_fmt_parse(dot + 1);
-		default:
-			break;
-		}
-	}
-	if (headlen >= 5 && memcmp(head, "{\\rtf", 5) == 0)
-		return FMT_RTF;
-	if (headlen >= 5 && (memcmp(head, "<html", 5) == 0 ||
-	    memcmp(head, "<HTML", 5) == 0))
-		return FMT_HTML;
-	if (headlen >= 9 && memcmp(head, "<!DOCTYPE", 9) == 0)
-		return FMT_HTML;
-	return FMT_TXT;
-}
-
 /* The Size and Length fields.  has_size is 0 for stdin, which has no file to
  * measure.  These two come before the metadata and the Contents preview, which
  * is the order the reference tool prints them in. */
@@ -95,10 +60,22 @@ info_print_body(const tu_doc_t *doc)
 	 * rather than shown blank. */
 	if (doc->nchars == 0)
 		return;
-	fputs("  Contents:  ", stdout);
 
 	p = doc->text != NULL ? doc->text : "";
 	end = p + doc->len;
+	/* A document that opens with a line break has an empty first line, and
+	 * the field is dropped for that too: "\nfoo" previews as nothing at all
+	 * rather than as the ellipsis that an empty preview would otherwise
+	 * show.  A line of spaces is not empty, so " \nfoo" previews as " ...".
+	 * The first character decides, so this is about where the text begins
+	 * and not about how many lines follow. */
+	if (p < end && (*p == '\n' || *p == '\r' ||
+	    (p + 2 < end && (unsigned char)p[0] == 0xe2 &&
+	    (unsigned char)p[1] == 0x80 && ((unsigned char)p[2] == 0xa8 ||
+	    (unsigned char)p[2] == 0xa9))))
+		return;
+	fputs("  Contents:  ", stdout);
+
 	nl = p;
 	/* A line ends at a newline or at a separator.  A separator is not a
 	 * newline to a terminal, so the preview stops at one rather than
@@ -286,9 +263,9 @@ tu_info_file(const char *path, int forced)
 	} else if (S_ISREG(st.st_mode) && (fp = fopen(path, "rb")) != NULL) {
 		headlen = fread(head, 1, sizeof(head), fp);
 		fclose(fp);
-		fmt = detect(path, &st, head, headlen);
+		fmt = tu_fmt_detect(path, &st, head, headlen);
 	} else {
-		fmt = detect(path, &st, head, 0);
+		fmt = tu_fmt_detect(path, &st, head, 0);
 	}
 
 	/* Plain text is read as plain text.  RTF and RTFD are read for their
@@ -299,20 +276,18 @@ tu_info_file(const char *path, int forced)
 	doc.text = NULL;
 	doc.len = 0;
 	doc.nchars = 0;
-	if (fmt == FMT_WEBARCHIVE) {
-		/* A web archive is a binary property list, not text.  This
-		 * port has no property list reader, so it says so rather than
-		 * counting the bytes of a container as if they were a
-		 * document.  Recorded in src/textutil/NOTES.md. */
-		fprintf(stderr, "textutil: reading %s input is not "
-		    "implemented\n", tu_fmt_name(FMT_WEBARCHIVE));
-		return 0;
-	}
-	if (fmt == FMT_TXT) {
+	if (fmt == FMT_TXT || fmt == FMT_WEBARCHIVE) {
 		/* A directory that is not a bundle is not a text file
-		 * either, and the reference tool will not open it.  A web
-		 * archive is named but not unpacked, so its bytes are
-		 * counted as they lie. */
+		 * either, and the reference tool will not open it.
+		 *
+		 * A web archive is named but not unpacked, so its bytes are
+		 * counted as they lie.  That is also what the reference tool
+		 * does to a file with that name which is not an archive: it
+		 * reports the type the name gives it and reads the contents
+		 * as text, so the Type line and the Length line here agree
+		 * with it while the contents of a real archive, which is a
+		 * binary property list this port cannot read, do not.
+		 * Recorded in src/textutil/NOTES.md. */
 		int why = S_ISDIR(st.st_mode) ? TU_READ_UNOPENABLE :
 		    tu_read_plain(path, &doc);
 
@@ -349,8 +324,26 @@ tu_info_file(const char *path, int forced)
 		    tu_read_html(buf, len, &doc, &meta);
 		free(buf);
 		if (why != 0) {
-			tu_read_error(path, why);
-			return 0;
+			/* A format that came from the bytes rather than the name is
+			 * a guess, and a guess whose read fails is read as plain
+			 * text, which is what makes an unclosed RTF group report
+			 * itself as plain text. */
+			if (tu_fmt_read_falls_back(path)) {
+				/* Whatever the reader managed to put in the
+				 * metadata is not the metadata of the plain
+				 * text it is about to become, and the fields
+				 * are printed from further down. */
+				tu_meta_free(&meta);
+				memset(&meta, 0, sizeof(meta));
+				if (tu_read_plain(path, &doc) != 0) {
+					tu_read_error(path, why);
+					return 0;
+				}
+				fmt = FMT_TXT;
+			} else {
+				tu_read_error(path, why);
+				return 0;
+			}
 		}
 	} else if (fmt == FMT_RTFD) {
 		int why = tu_read_rtfd(path, &doc, &meta);

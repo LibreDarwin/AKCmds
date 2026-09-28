@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 /* The -help text, one entry per output line, NULL terminated.  The reference
  * tool writes these bytes to stdout and exits 0, both for -help and when no
@@ -174,6 +175,15 @@ enum {
  * for a name it does not accept.  The three groups differ only in the
  * diagnostic, so the forced-format path needs no reader of its own. */
 int tu_fmtread_for(tu_fmt_t f);
+
+/* The reader a file nothing was forced on is read with, chosen from its name
+ * and its first bytes.  This only chooses.  A format that came from the name is
+ * read or reported as an error, but one that came from the bytes is a guess,
+ * and a guess whose read fails is read as plain text instead.  That is what
+ * tu_fmt_read_falls_back says. */
+tu_fmt_t tu_fmt_detect(const char *path, const struct stat *st,
+    const char *head, size_t headlen);
+int tu_fmt_read_falls_back(const char *path);
 
 /* Check that a path names something this port can read as a file.  Returns 0
  * when it does, otherwise one of the TU_READ_ reasons.  A directory is

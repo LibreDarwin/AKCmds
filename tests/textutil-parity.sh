@@ -210,7 +210,113 @@ mktpl() {
     cp "$t/one.html" "$t/lying.rtf"
     cp "$t/one.rtf" "$t/lying.html"
     cp "$t/one.rtf" "$t/lying.txt"
-    cp "$t/one.html" "$t/noext"
+    # A document with a doctype in it under a name that is not a format at all.
+    # This is the one way a doctype makes something HTML, since a .doc or a
+    # .txt or a .foo are all read as plain text whatever they hold.  The text
+    # is inline rather than in a block, because a block paragraph is one of
+    # the known divergences in src/textutil/NOTES.md and this is a case about
+    # the name and not about the layout.
+    printf '<!doctype html>a doctype' >"$t/docty"
+    cp "$t/docty" "$t/docty.foo"
+    cp "$t/docty" "$t/docty.txt"
+    cp "$t/docty" "$t/docty.rtf"
+    cp "$t/docty" "$t/docty.doc"
+    # The same document, without the paragraphs, under a name that is not a
+    # format.  These are about the name and about the doctype, and one.html
+    # holds <p> elements, which is one of the known divergences in
+    # src/textutil/NOTES.md and is read back elsewhere.
+    printf '<html>a tag' >"$t/inl"
+    cp "$t/inl" "$t/noext"
+    cp "$t/inl" "$t/inl.htm"
+    cp "$t/inl" "$t/inl.odt"
+    # The names that are read rather than sniffed, and the ones that are not.
+    # .htm is a second spelling of .html, and the Word container names are
+    # believed where .rtfd and .webarchive are: a .doc holding RTF is read as
+    # RTF, so its name decides nothing.  .htm gets inl and not one.html, for
+    # the reason given above.
+    cp "$t/one.rtf" "$t/htm.rtf"
+    cp "$t/one.rtf" "$t/upper.HTM"
+    cp "$t/one.rtf" "$t/lying.doc"
+    cp "$t/one.rtf" "$t/lying.docx"
+    cp "$t/one.rtf" "$t/lying.wordml"
+    cp "$t/one.rtf" "$t/filer.rtfd"
+    # Bytes that decide a file with no format in its name, and bytes that do
+    # not.  The RTF mark is five bytes and no version digit, it is case
+    # sensitive, and only a newline or a carriage return may come before it;
+    # HTML is the opposite on both, but a doctype alone is not enough to be
+    # one.  Passing the gate is not the last word either: the file is read
+    # with the reader the gate chose, and a read that fails falls back to
+    # plain text, which is what snr4, snr7, snr8 and snr11 are for.
+    printf '{\\rtf1 a mark at the start}' >"$t/snr1"
+    printf '{\\rtf9 any digit will do}' >"$t/snr2"
+    printf '{ a brace with no mark}' >"$t/snr3"
+    printf '{rtf and no brace}' >"$t/snr4"
+    printf '{\\rtf and no digit}' >"$t/snr5"
+    printf '{\\RTF1 in capitals}' >"$t/snr6"
+    printf ' {\\rtf1 marked but late}' >"$t/snr7"
+    printf '\n\t{\\rtf1 marked and indented}' >"$t/snr8"
+    # A leading newline may come before the mark and a leading tab may not,
+    # which is the reader's rule and not the gate's.  Of the eight above only
+    # snr5 gets as far as the reader, and the reader takes it, so the six that
+    # come back as plain text are the four that fail the gate (snr3 and snr4
+    # lack the backslash, snr6 is in capitals, snr7 and snr8 are behind
+    # something the mark does not allow) plus the two that do open a file and
+    # then fail to read it, below.
+    printf '\n{\\rtf1 a mark on the second line}' >"$t/snr9"
+    printf '\t{\\rtf1 a mark after a tab}' >"$t/snr10"
+    # An unclosed group, which is a mark and then a file that falls apart, and
+    # the same group closed, which is the file the reader can open.
+    printf '{\\rtf1 an unclosed group' >"$t/snr11"
+    printf '{\\rtf1 \\bogus x}' >"$t/snr12"
+    # A gate wants a byte past the spelling it matches, and the two gates want
+    # different numbers of them: the mark alone is text and needs a sixth byte,
+    # while "<html" needs two and every six byte document beginning with those
+    # five is text, whether the sixth byte is a digit, a space or a bracket.
+    printf '{\\rtf' >"$t/snr13"
+    printf '{\\rtf}' >"$t/snr14"
+    printf '{\\rtfa}' >"$t/snr15"
+    printf '<html' >"$t/snh13"
+    printf '<html5' >"$t/snh14"
+    printf '<html5>' >"$t/snh15"
+    printf '<html ' >"$t/snh16"
+    printf '  <html>' >"$t/snh17"
+    printf '<!doctype html' >"$t/snh18"
+    printf '<!doctype html>' >"$t/snh19"
+    printf '<html>a tag</html>' >"$t/snh1"
+    printf '<HTML>a tag in capitals</HTML>' >"$t/snh2"
+    printf '  <html>a tag indented</html>' >"$t/snh3"
+    printf '<htmlfoo>a tag that only starts like one</htmlfoo>' >"$t/snh4"
+    printf '<htm>a shorter tag</htm>' >"$t/snh5"
+    printf '\n\n<html>a tag two lines down</html>' >"$t/snh11"
+    printf '\t\t<html>a tag after two tabs</html>' >"$t/snh12"
+    # An empty document, and one holding only a line break, which is the case
+    # where -info drops its Contents field outright.
+    : >"$t/empty"
+    printf '\n' >"$t/brk"
+    printf '\nafter a break\n' >"$t/afterbrk"
+    # The text here is inline rather than in a block, because a block
+    # paragraph is one of the known divergences in src/textutil/NOTES.md and
+    # these cases are about which reader ran, not about how it lays out.
+    printf '<!doctype html>a doctype' >"$t/snh6"
+    printf '<!DOCTYPE HTML>a doctype in capitals' >"$t/snh7"
+    printf '<!doctype x>a doctype that is not html' >"$t/snh8"
+    printf '<!doctypehtml>no space is not html</!doctypehtml>' >"$t/snh9"
+    printf 'x<html>not at the start</html>' >"$t/snh10"
+    # An HTML entity is the tell that decides whether the HTML reader ran, and
+    # a plain text file keeps it escaped.
+    printf '&lt;b&gt;escaped&lt;/b&gt;\n' >"$t/ents"
+    cp "$t/ents" "$t/ents.txt"
+    cp "$t/ents" "$t/ents.html"
+    cp "$t/ents" "$t/ents.htm"
+    cp "$t/ents" "$t/ents.foo"
+    cp "$t/one.rtf" "$t/upper.RTF"
+    # A bundle and a plain folder, for the directory branch of the name test.
+    mkdir -p "$t/realdir.rtfd"; printf '{\\rtf1 a real bundle}' >"$t/realdir.rtfd/TXT.rtf"
+    mkdir -p "$t/realdir.HTM"
+    # A name that is believed and a reader that is missing: the Type line is
+    # the one the name gives, and the contents are read as text, which is what
+    # the reference tool does to a webarchive that is not an archive.
+    printf 'not an archive' >"$t/notarch.webarchive"
 }
 
 mkread() {
@@ -831,7 +937,64 @@ check_read "file named as a bundle" -info filer.rtfd
 check_read "html named as rtf" -info lying.rtf
 check_read "rtf named as html" -info lying.html
 check_read "rtf named as txt" -info lying.txt
-check_read "html with no name" -info noext
+check_read "html with no name" -info inl
+
+# The same question asked of -convert, which is where a reader chosen by name
+# rather than by bytes is visible in the text that comes back: a .rtf holding
+# HTML fails to open instead of being read as HTML, and a file named for a
+# format it does not hold is read as what it holds.
+check_read "convert html named as rtf" -convert txt -stdout lying.rtf
+check_read "convert rtf named as html" -convert txt -stdout lying.html
+check_read "convert rtf named as txt" -convert txt -stdout lying.txt
+check_read "convert html with no name" -convert txt -stdout inl
+check_read "convert rtf named as doc" -convert txt -stdout lying.doc
+check_read "convert rtf named as docx" -convert txt -stdout lying.docx
+check_read "convert html named as odt" -convert txt -stdout inl.odt
+check_read "convert rtf named as wordml" -convert txt -stdout lying.wordml
+check_read "convert rtf named as rtfd" -convert txt -stdout filer.rtfd
+check_read "convert doctype named as foo" -convert txt -stdout docty.foo
+check_read "convert doctype named as txt" -convert txt -stdout docty.txt
+check_read "convert doctype named as rtf" -convert txt -stdout docty.rtf
+check_read "convert doctype named as doc" -convert txt -stdout docty.doc
+check_read "info doctype named as foo" -info docty.foo
+check_read "convert htm named as rtf" -convert txt -stdout htm.rtf
+check_read "convert html named as htm" -convert txt -stdout inl.htm
+check_read "convert htm in capitals" -convert txt -stdout upper.HTM
+check_read "convert rtf in capitals" -convert txt -stdout upper.RTF
+check_read "convert a real bundle" -convert txt -stdout realdir.rtfd
+check_read "convert a folder named htm" -convert txt -stdout realdir.HTM
+check_read "info rtf in capitals" -info upper.RTF
+check_read "info a real bundle" -info realdir.rtfd
+check_read "info a webarchive that is not one" -info notarch.webarchive
+check_read "convert a webarchive that is not one" -convert txt -stdout notarch.webarchive
+
+# The bytes that decide a file with no format in its name.  Each of these is a
+# case where being one byte or one case different changes the reader, and where
+# the answer is visible in the text rather than only in a name.
+for f in snr1 snr2 snr3 snr4 snr5 snr6 snr7 snr8 snr9 snr10 snr11 snr12 \
+         snr13 snr14 snr15; do
+    check_read "sniff rtf $f" -info "$f"
+    check_read "convert sniff rtf $f" -convert txt -stdout "$f"
+done
+for f in snh1 snh2 snh3 snh4 snh5 snh6 snh7 snh8 snh9 snh10 snh11 snh12 \
+         snh13 snh14 snh15 snh16 snh17 snh18 snh19; do
+    check_read "sniff html $f" -info "$f"
+    check_read "convert sniff html $f" -convert txt -stdout "$f"
+done
+# A document that begins with a line break has an empty first line, and
+# -info shows no Contents field for it at all.  One that begins with a space
+# is not empty and does get one.
+for f in empty brk afterbrk; do
+    check_read "empty first line $f" -info "$f"
+    check_read "convert empty first line $f" -convert txt -stdout "$f"
+done
+
+# An entity is how the HTML reader proves it ran, and each of these names the
+# same bytes differently.
+for f in ents ents.txt ents.html ents.htm ents.foo; do
+    check_read "entity $f" -info "$f"
+    check_read "convert entity $f" -convert txt -stdout "$f"
+done
 
 echo
 echo "PASS=$PASS FAIL=$FAIL"

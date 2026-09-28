@@ -51,6 +51,21 @@ difference. `PREVIEW_UNITS` in `info.c` is where the boundary is decided, and
 the check is written as a first-unit test so that the bug stays visible rather
 than being quietly corrected later.
 
+A document whose **first line is empty** has no preview at all, and the
+`Contents:` field is not printed rather than printed empty. A newline, a
+carriage return, or a line or paragraph separator at the very start is enough,
+because all four end the first line, and a leading space is not:
+
+    $ printf '\nplain text\n' > x
+    $ /usr/bin/textutil -info x
+    File:  x
+      Type:  plain text
+      Size:  12 bytes
+      Length:  10 characters
+
+This was a bug in this port, found by the empty-document cases in the harness
+while detection was being worked on, and it is fixed rather than documented.
+
 ## A byte order mark is consumed, never counted, and never written back
 
 `tu_decode_plain()` honours a leading mark and drops it, so the mark reaches
@@ -243,6 +258,57 @@ outside ASCII, is written through as UTF-8.
 Transitional one that wraps text in `<font>` elements. Its value is parsed and
 validated; the serializer is not implemented. See below.
 
+## A file with no format in its name is read as what its bytes say, and a guess that fails is plain text
+
+A name picks the reader outright when it is one of `.txt`, `.rtf`, `.html`,
+`.htm` and `.webarchive`, and those five are the only ones believed. A `.doc`,
+`.docx`, `.odt`, `.wordml` or `.rtfd` **file**, a `.foo`, and a name with no dot
+at all are all read by their bytes instead, which is why a `.doc` holding RTF
+comes back as RTF text. A `.rtfd` **directory** is a bundle because of what it
+is called; what it holds decides whether it can be read, not what it is.
+
+A `.webarchive` is believed as a *name* but there is no reader for it here, so
+its bytes are read as text, which is what the reference tool does to a file
+with that name that is not an archive: the `Type` line is the one the name
+gives and the `Length` is the count of the text. A real archive is a binary
+property list, so what it holds is a divergence; see the list below.
+
+The two byte gates are not alike, and neither is satisfied by the shortest
+thing that could match it. Each wants bytes *past* the spelling, and they want
+different numbers of them:
+
+| | matches | bytes wanted | case | leading bytes |
+| --- | --- | --- | --- | --- |
+| RTF | `{\rtf` | 6 | sensitive | only `\n` and `\r` |
+| HTML | `<html` | 7 | not | any whitespace |
+| HTML | `<!doctype html` | 15 | not | any whitespace |
+
+So `{\rtf` on its own is plain text and `{\rtf}` is RTF, and a six byte document
+beginning `<html` is text whatever its sixth byte is — `5`, a space, or the
+bracket that closes the tag — while every seven byte one is HTML. A version digit
+is not wanted, which is what `{\rtf}` and `{\rtfa}` show, and `{\RTF}` is text
+whatever follows it. A doctype is not enough on its own either: `<!doctype x>` and
+`<!doctype html` are text and `<!doctype html>` is HTML.
+
+Passing the gate is not the last word. The reference tool then **reads the file
+with the reader the gate chose, and falls back to plain text when that read
+fails.** That is why `{\rtf1 an unclosed group` is plain text while
+`{\rtf1 \bogus x}` is RTF: both start the same way and both pass the gate, and
+one is a file that falls apart and the other is not. The whole file is read to
+decide, not a prefix of it, so a group that closes fifty kilobytes after the
+mark is still RTF.
+
+A name that is believed is never given up on, so a file called `notes.rtf`
+holding something the RTF reader will not take is an error rather than plain
+text. That is the whole difference between the two paths, and it is
+`tu_fmt_read_falls_back()`. The belief is about the *reader*, not about the
+contents, which is why a `.webarchive` that is not an archive is still read as
+plain text rather than refused: there is no reader to give up on.
+
+A read that fails leaves its output empty rather than half-filled, the way
+`tu_meta_free()` leaves a `tu_meta_t` it never filled in empty, because a
+caller that falls back to another reader goes on to use it.
+
 ## RTF: the document ends at its outermost group
 
 An RTF file is read only as far as the brace that closes its outermost group.
@@ -333,8 +399,10 @@ a feature that exists on both sides.
 - **`webarchive` is not read.** The reference tool reads a webarchive as an
   archive of a web page and reports its title and its text. Reading one needs
   a binary property list reader, which this port does not have, so a file with
-  that name is refused with a message saying the reader is missing. `-format
-  webarchive` is refused the same way.
+  that name has its bytes read as text. A file with that name which is *not*
+  an archive matches the reference tool exactly, and is a case in the harness;
+  a real one does not. `-format webarchive` is refused, as it is for every
+  format this port has no reader for.
 - **Single byte encodings are not converted.** `-encoding` accepts the
   `NSStringEncoding` numbers the reference tool accepts — it has a table for
   each, so a number is never an invalid encoding — but only `4` is one this
@@ -369,7 +437,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 625 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 733 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
@@ -380,13 +448,23 @@ the destination edge cases: a missing parent, an unwritable parent, a parent
 that is a file, a destination that is a directory, a bundle onto a directory
 and onto a file, spaces in names, and a file whose name looks like an option.
 
-The readers are covered by twenty-five cases at the end of the suite. Each
-reads a file that was written once by the reference tool into a template, which
-every case then copies, so that both tools are given identical bytes rather
-than each other's work. They cover RTF, a bundle and HTML as they are written,
-the same three with metadata, five files that are not RTF well enough to read,
-seven bundles that are each wrong in a different way, and four files whose name
-says one thing and whose contents another.
+The readers are covered at the end of the suite. Each reads a file that was
+written once by the reference tool into a template, which every case then
+copies, so that both tools are given identical bytes rather than each other's
+work. They cover RTF, a bundle and HTML as they are written, the same three
+with metadata, five files that are not RTF well enough to read, seven bundles
+that are each wrong in a different way, and four files whose name says one thing
+and whose contents another.
+
+Detection is covered separately, by the name cases above and by a group of
+byte-gate cases: fifteen for the RTF mark and nineteen for the HTML one, each run
+through both `-info` and `-convert` so that the type and the text are both
+compared. Between them they pin the digit that is not wanted, the case
+sensitivity, the newlines that may come before the mark and the tab that may
+not, the byte each gate wants past its own spelling, the two HTML openings and
+the doctype that is not one, the unclosed group and the balanced one, a
+webarchive that is not an archive, and three files whose first line is empty,
+which is when `-info` omits its `Contents:` field altogether.
 
 Two fixtures are excluded from the tree comparison for reasons that belong to
 `diff` rather than to the tools: `noperm.txt` cannot be read by `diff`, and the

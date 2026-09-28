@@ -1208,6 +1208,13 @@ tu_read_html(const void *buf, size_t len, tu_doc_t *out, tu_meta_t *meta)
 		free(h.text.buf);
 		free(h.mname);
 		free(h.mval);
+		/* A read that fails leaves out empty, for the same reason and
+		 * with the same rule as tu_read_rtf. */
+		if (out != NULL) {
+			out->text = NULL;
+			out->len = 0;
+			out->nchars = 0;
+		}
 		return TU_READ_UNOPENABLE;
 	}
 	if (out != NULL) {

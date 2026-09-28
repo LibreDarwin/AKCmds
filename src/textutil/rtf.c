@@ -1061,15 +1061,25 @@ int
 tu_read_rtf(const void *buf, size_t len, tu_doc_t *out, tu_meta_t *meta)
 {
 	struct rtf r;
+	const unsigned char *start = buf;
+
+	/* A newline or a carriage return in front of the mark is skipped, as
+	 * many as there are.  A space or a tab in front of it is not, and is
+	 * this reader not opening the file at all.  That is the difference
+	 * between a file the reference tool reads and one it refuses. */
+	while (len > 0 && (*start == '\n' || *start == '\r')) {
+		start++;
+		len--;
+	}
 
 	/* RTF starts with that, and a file that does not is not a text file
 	 * this reader can open at all.  A file that does start with it and
 	 * then falls apart is the other kind of failure. */
-	if (len < 5 || memcmp(buf, "{\\rtf", 5) != 0)
+	if (len < 5 || memcmp(start, "{\\rtf", 5) != 0)
 		return TU_READ_UNOPENABLE;
 	memset(&r, 0, sizeof(r));
-	r.p = buf;
-	r.end = (const unsigned char *)buf + len;
+	r.p = start;
+	r.end = start + len;
 	r.m = meta;
 	r.uc = 1;
 	r.target = TU_MF_NONE;
@@ -1077,10 +1087,18 @@ tu_read_rtf(const void *buf, size_t len, tu_doc_t *out, tu_meta_t *meta)
 	rtf_run(&r);
 	/* A group left open is a file that falls apart.  A group closed more
 	 * times than it was opened is not: the reference tool stops caring
-	 * once the outermost group is done. */
+	 * once the outermost group is done.  A read that fails leaves out
+	 * empty, the way tu_meta_free leaves a meta it never filled in empty,
+	 * because a caller that falls back to another reader will go on to use
+	 * it. */
 	if (r.bad || r.depth != 0) {
 		free(r.text.buf);
 		free(r.val.buf);
+		if (out != NULL) {
+			out->text = NULL;
+			out->len = 0;
+			out->nchars = 0;
+		}
 		return TU_READ_WRONGFMT;
 	}
 	if (r.text.buf == NULL)
@@ -1088,6 +1106,11 @@ tu_read_rtf(const void *buf, size_t len, tu_doc_t *out, tu_meta_t *meta)
 	if (r.text.failed) {
 		free(r.text.buf);
 		free(r.val.buf);
+		if (out != NULL) {
+			out->text = NULL;
+			out->len = 0;
+			out->nchars = 0;
+		}
 		return TU_READ_UNOPENABLE;
 	}
 	if (out != NULL) {

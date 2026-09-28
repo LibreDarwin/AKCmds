@@ -22,9 +22,12 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "textutil.h"
@@ -274,10 +277,25 @@ forced_read_group(void)
 /* Read one input, honouring a forced -format.  Returns TU_READ_OK when the
  * file has been read, otherwise the reason, without having said anything: the
  * caller reports it, because -cat and -convert differ in what a failure does
- * to the exit status. */
+ * to the exit status.
+ *
+ * With nothing forced the file's own name and first bytes choose the reader,
+ * which is the same choice -info makes and reports as its Type line.  RTF and
+ * HTML are read here; the rich and HTML readers take a buffer rather than a
+ * path, so the file is read once and handed over. */
 static int
 read_input(const char *path, tu_doc_t *d)
 {
+	struct stat st;
+	tu_meta_t found;
+	tu_fmt_t fmt;
+	FILE *fp;
+	char *buf;
+	size_t cap, len;
+	int why;
+
+	memset(&found, 0, sizeof(found));
+
 	if (forced >= 0) {
 		int group = forced_read_group();
 
@@ -285,8 +303,86 @@ read_input(const char *path, tu_doc_t *d)
 			return group == TU_FMTREAD_RICH ? TU_READ_UNOPENABLE :
 			    group == TU_FMTREAD_PACKAGE ? TU_READ_WRONGFMT :
 			    TU_READ_ABSENTFORMAT;
+		return tu_read_plain(path, d);
 	}
-	return tu_read_plain(path, d);
+	if (stat(path, &st) != 0)
+		return errno == EACCES || errno == EPERM ?
+		    TU_READ_DENIED : TU_READ_MISSING;
+	if (S_ISDIR(st.st_mode)) {
+		const char *dot = strrchr(path, '.');
+
+		if (dot == NULL || strcasecmp(dot, ".rtfd") != 0)
+			return TU_READ_UNOPENABLE;
+		why = tu_read_rtfd(path, d, &found);
+		tu_meta_free(&found);
+		return why;
+	}
+	if ((fp = fopen(path, "rb")) == NULL)
+		return errno == EACCES || errno == EPERM ?
+		    TU_READ_DENIED : TU_READ_UNOPENABLE;
+	/* The whole file is wanted, not a prefix of it, because the reader is
+	 * what decides whether the file is RTF or HTML at all, and a mark
+	 * followed by a group that closes fifty kilobytes later is RTF while
+	 * the same mark with nothing after it is not.  A size is a hint and not
+	 * a promise, so the buffer grows if the file is larger than it says. */
+	cap = 65536;
+	if (S_ISREG(st.st_mode) && st.st_size > 0 &&
+	    (size_t)st.st_size + 1 > cap)
+		cap = (size_t)st.st_size + 1;
+	if ((buf = malloc(cap)) == NULL) {
+		fclose(fp);
+		return TU_READ_UNOPENABLE;
+	}
+	len = 0;
+	for (;;) {
+		size_t got = fread(buf + len, 1, cap - len, fp);
+
+		len += got;
+		if (len < cap)
+			break;
+		{
+			char *bigger = realloc(buf, cap * 2);
+
+			if (bigger == NULL) {
+				free(buf);
+				fclose(fp);
+				return TU_READ_UNOPENABLE;
+			}
+			buf = bigger;
+		}
+		cap *= 2;
+	}
+	if (ferror(fp)) {
+		free(buf);
+		fclose(fp);
+		return TU_READ_UNOPENABLE;
+	}
+	fclose(fp);
+	fmt = tu_fmt_detect(path, &st, buf, len);
+	/* A web archive is believed as a name, so the Type line says so, but
+	 * there is no reader for one here: the reference tool reads a file
+	 * with that name which is not an archive as plain text, and so does
+	 * this.  A real archive, whose contents are a binary property list,
+	 * comes back as its own bytes.  Recorded in src/textutil/NOTES.md. */
+	if (fmt == FMT_TXT || fmt == FMT_WEBARCHIVE) {
+		why = tu_read_plain(path, d);
+	} else {
+		/* A format that came from the bytes rather than the name is a
+		 * guess, and a guess whose read fails is read as plain text.  That
+		 * is what makes an unclosed RTF group come back as text without
+		 * changing what a file called notes.rtf does. */
+		int fall_back = tu_fmt_read_falls_back(path);
+
+		if (fmt == FMT_RTF)
+			why = tu_read_rtf(buf, len, d, &found);
+		else
+			why = tu_read_html(buf, len, d, &found);
+		tu_meta_free(&found);
+		if (why != TU_READ_OK && fall_back)
+			why = tu_read_plain(path, d);
+	}
+	free(buf);
+	return why;
 }
 
 /* Report a reason from the gate above.  The reference tool's two wordings go

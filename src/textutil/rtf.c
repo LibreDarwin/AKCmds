@@ -100,6 +100,93 @@ sink_uescape(struct sink *s, unsigned long u)
 	sink_str(s, tmp);
 }
 
+/* The embedding levels the text being written is under, and the ones the reader
+ * has been told are open.  The two come apart across a page break, which closes
+ * the reader's copy without the text leaving the levels, so both are kept, and
+ * the reader's copy is kept whole rather than as a depth: a level that is
+ * opened and closed with no text between leaves the reader where it was, so the
+ * text either side of it is written under one level rather than two. */
+struct rtf_embed {
+	unsigned long *stack;		/* the levels the text is under */
+	size_t dep;			/* how deep stack is */
+	unsigned long *open;		/* the levels the reader has been told are open */
+	size_t odep;			/* how deep open is */
+	int uc0;			/* whether a text escape has said \uc0 */
+};
+
+/* An embedding level, as RTF writes one.  Unlike a text escape this always
+ * carries its own \uc0, so that a \u escape cannot be left to run long by
+ * whatever \ucN a text escape before it put in force, and it hands that count
+ * back afterwards for the next text escape to state for itself. */
+static void
+embed_control(struct sink *s, struct rtf_embed *e, unsigned long cp)
+{
+	sink_str(s, "\\uc0");
+	sink_uescape(s, cp);
+	e->uc0 = 0;
+}
+
+/* Bring the levels the reader has been told are open into line with the levels
+ * the text is under.  The levels the two agree on are left alone, so a control
+ * that opens and closes a level with no text between leaves the text either
+ * side of it under one level and writes nothing at all; the levels that differ
+ * are closed from the top down and opened from the bottom up. */
+static void
+embed_reconcile(struct sink *s, struct rtf_embed *e)
+{
+	size_t k = 0;
+
+	while (k < e->dep && k < e->odep && e->stack[k] == e->open[k])
+		k++;
+	while (e->odep > k) {
+		embed_control(s, e, 0x202C);
+		e->odep--;
+	}
+	while (e->odep < e->dep) {
+		embed_control(s, e, e->stack[e->odep]);
+		e->open[e->odep] = e->stack[e->odep];
+		e->odep++;
+	}
+}
+
+/* A control that ends a level takes the level off the text, if there is one
+ * open.  Nothing is written for it here: whether the reader is told to close a
+ * level is settled when the next text is written, so that a level opened and
+ * closed with no text between is never told at all. */
+static void
+embed_unwind(struct rtf_embed *e)
+{
+	if (e->dep > 0)
+		e->dep--;
+}
+
+/* Close every level the reader has been told of.  A paragraph mark and the end
+ * of the document close the levels and leave nothing open behind them. */
+static void
+embed_close(struct sink *s, struct rtf_embed *e)
+{
+	while (e->odep > 0) {
+		embed_control(s, e, 0x202C);
+		e->odep--;
+	}
+}
+
+/* A page break writes the levels the reader has been told of out and closes
+ * them, since RTF takes the reader's embedding state with it.  The levels
+ * themselves are kept, though, and the text after the break is written as if
+ * they were still open: they are what a later control closes, and what the
+ * paragraph closes at its end. */
+static void
+embed_page(struct sink *s, struct rtf_embed *e)
+{
+	size_t i;
+
+	embed_reconcile(s, e);
+	for (i = e->odep; i > 0; i--)
+		embed_control(s, e, 0x202C);
+	sink_str(s, "\\page ");
+}
+
 /* A paragraph's properties are written out when they are first needed and
  * again whenever they change, so a run of paragraphs that agree writes the
  * block once.  The first one is followed by a blank line, because it opens the
@@ -213,6 +300,17 @@ needs_uc(const unsigned char *p, size_t n)
 	for (size_t k = 1; k < seq && k < n; k++)
 		cp = (cp << 6) | ((unsigned char)p[k] & 0x3Fu);
 	return to_cp1252(cp) == 0;
+}
+
+/* Whether a run of text that a NUL cut short begins again at this character.
+ * A character with no code page byte needs a \u escape, and that is how the run
+ * resumes.  A control that ends an embedding level is never written as a \u
+ * escape of its own, only as the closing of levels already open, so it is not
+ * one of those. */
+static int
+resumes(const unsigned char *p, size_t n)
+{
+	return needs_uc(p, n) && tu_bidi_embed(p, n) != 0x202C;
 }
 
 /* The code page byte for a character, or 0 when it has none. */
@@ -377,8 +475,7 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 {
 	struct sink s = { NULL, 0, 0, 0 };
 	FILE *fp;
-	int wrote_uc0 = 0;
-	int empty = d->nchars == 0;
+	int empty = !tu_bidi_para((const unsigned char *)d->text, d->len);
 	const unsigned char *p = (const unsigned char *)d->text;
 	size_t i = 0;
 	/* The reference tool writes the text as a C string, so a NUL ends it and
@@ -394,10 +491,16 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	int at_para = 1;
 	int have_pard = 0;
 	const char *last_dir = NULL;
+	/* The embedding controls under the text being written, and the ones the
+	 * reader has been told are open, which come apart across a page break. */
+	struct rtf_embed e;
+	int failed;
 
 	tu_font_face(st != NULL ? st->font : NULL, &face);
 	if (st != NULL && st->fontsize > 0)
 		points = st->fontsize;
+
+	memset(&e, 0, sizeof(e));
 
 	sink_str(&s, envelope_pre);
 	/* An empty document names no font and opens no paragraph: it is just the
@@ -419,9 +522,27 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 
 	len = d->len;
 
-	while (i < len) {
+	/* One level per control, and there cannot be more controls than a third of
+	 * the text, so this covers any depth the reference tool nests to. */
+	failed = len / 3 + 2 > SIZE_MAX / sizeof(*e.stack);
+	if (!failed) {
+		e.stack = malloc((len / 3 + 2) * sizeof(*e.stack));
+		e.open = malloc((len / 3 + 2) * sizeof(*e.open));
+		failed = e.stack == NULL || e.open == NULL;
+	}
+	if (failed) {
+		free(e.stack);
+		free(e.open);
+		free(s.buf);
+		tu_write_failed(path);
+		return -1;
+	}
+
+	/* An empty document writes no text at all, and so opens no paragraph
+	 * either, even when it has characters in it that are only directions. */
+	while (i < len && !empty) {
 		unsigned char c;
-		unsigned long cp;
+		unsigned long cp, ec;
 		size_t seq = 1;
 
 		/* The head of a paragraph is where a mark naming its direction
@@ -436,7 +557,11 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			at_para = 0;
 			dir = m == 0x200F ? dir_right
 			    : m == 0x200E ? dir_named : dir_natural;
-			if (!have_pard || strcmp(dir, last_dir) != 0) {
+			/* A paragraph with nothing in it that is written is not
+			 * written, so it has no properties to state and leaves the
+			 * ones before it standing. */
+			if (tu_bidi_para(p + i, len - i) &&
+			    (!have_pard || strcmp(dir, last_dir) != 0)) {
 				put_pard(&s, dir, !have_pard);
 				if (have_pard) {
 					/* The run's properties were written into
@@ -458,6 +583,22 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 
 		if (i >= len)
 			break;
+
+		/* An embedding or override control is a direction given to the text
+		 * that follows rather than a character the reader is shown, so it is
+		 * taken out of the text and kept as a level the run under it has.  One
+		 * that opens a level says nothing on its own, since a level the text
+		 * under it never uses is never written.  One that ends a level with
+		 * none open does nothing; otherwise it closes the level there and
+		 * then, rather than waiting for the next character to do it. */
+		if ((ec = tu_bidi_embed(p + i, len - i)) != 0) {
+			if (ec == 0x202C)
+				embed_unwind(&e);
+			else
+				e.stack[e.dep++] = ec;
+			i += 3;
+			continue;
+		}
 
 		c = p[i];
 
@@ -481,6 +622,44 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			cp = (cp << 6) | (p[i + k] & 0x3Fu);
 		i += seq;
 
+		/* A paragraph mark ends the paragraph without any text of its own
+		 * being written, so the levels under the text are closed and none
+		 * is opened for it.  A CR that begins the paragraph is swallowed
+		 * with the text that came before it, and a CR on its own is a
+		 * paragraph mark, which is the LF case.  A CR that pairs with the
+		 * LF after it is that same mark written as a pair, and the levels
+		 * are closed before its CR rather than between the two halves, so
+		 * that no text is written under them. */
+		if (cp == '\n' || cp == '\r') {
+			int pair = 0;
+
+			/* The controls between the two halves of the pair are not
+			 * written at all, since the mark closes the levels and leaves
+			 * no text under them for them to be recorded on. */
+			if (cp == '\r') {
+				size_t j = i;
+
+				while (tu_bidi_embed(p + j, len - j) != 0)
+					j += 3;
+				if (j < len && p[j] == '\n') {
+					pair = 1;
+					i = j + 1;
+				}
+			}
+			e.uc0 = 0;
+			at_para = 1;
+			embed_close(&s, &e);
+			e.dep = 0;
+			if (pair)
+				sink_put(&s, "\r", 1);
+			sink_put(&s, "\\\n", 2);
+			continue;
+		}
+
+		/* Whatever this character turns out to be, it is written under the
+		 * levels that are open, so they are stated before it is looked at. */
+		embed_reconcile(&s, &e);
+
 		switch (cp) {
 		case '\\':
 			sink_str(&s, "\\\\");
@@ -497,12 +676,14 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		case '\f':
 			/* A form feed is a page break, which is the one control
 			 * RTF spells out rather than writing as itself.  It also
-			 * ends what the text before it set up, the way a
-			 * paragraph mark does, so the next \u escape says \uc0
-			 * again. */
-			wrote_uc0 = 0;
-			sink_str(&s, "\\page ");
+			 * ends what the text before it set up, the way a paragraph
+			 * mark does, so the next \u escape says \uc0
+			 * again, and the levels the text was under are written
+			 * out and closed around it. */
+			e.uc0 = 0;
+			embed_page(&s, &e);
 			continue;
+
 		case 0:
 			/* A NUL ends the text of the run it falls in.  What
 			 * follows is dropped up to the next page break,
@@ -519,30 +700,30 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			 * by byte, because whether a run resumes depends on the
 			 * character and not on its first byte. */
 			while (i < len && p[i] != '\f' && p[i] != '\r' &&
-			    p[i] != '\n' && !needs_uc(p + i, len - i))
+			    p[i] != '\n') {
+				unsigned long ec = tu_bidi_embed(p + i, len - i);
+
+				/* A control that ends a level is not a place the
+				 * run begins again, but it still says something
+				 * about the text that follows, so it is acted on
+				 * and the drop goes on past it. */
+				if (ec == 0x202C) {
+					embed_unwind(&e);
+					i += 3;
+					continue;
+				}
+				if (ec != 0 || resumes(p + i, len - i))
+					break;
 				i += utf8_width((unsigned char)p[i]);
+			}
 			if (i < len && p[i] == '\r' && i + 1 < len &&
 			    p[i + 1] == '\n')
 				i++;
 			continue;
 		case '\r':
-			/* A lone carriage return is RTF's paragraph mark.  Inside a
-			 * CRLF pair the CR is passed through untouched and the LF
-			 * that follows becomes the mark, which is what the
-			 * reference tool writes. */
-			if (i < len && p[i] == '\n') {
-				sink_put(&s, "\r", 1);
-				continue;
-			}
-			/* FALLTHROUGH */
-		case '\n':
-			/* A backslash plus a raw newline: RTF's paragraph mark.  It ends
-			 * the paragraph, and with it whatever the previous one set up,
-			 * so the next paragraph that needs a \u escape says \uc0 again,
-			 * and the next paragraph is a head that may open with a mark. */
-			wrote_uc0 = 0;
-			at_para = 1;
-			sink_put(&s, "\\\n", 2);
+			/* A CR that pairs with the LF after it is text, and was
+			 * passed through untouched above. */
+			sink_put(&s, "\r", 1);
 			continue;
 		}
 		if (cp < 0x80) {
@@ -560,9 +741,9 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 				continue;
 			}
 		}
-		if (!wrote_uc0) {
+		if (!e.uc0) {
 			sink_str(&s, "\\uc0");
-			wrote_uc0 = 1;
+			e.uc0 = 1;
 		}
 		if (cp >= 0x10000) {
 			unsigned long v = cp - 0x10000;
@@ -573,6 +754,12 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			sink_uescape(&s, cp);
 		}
 	}
+
+	/* The document's last paragraph ends like any other, so the levels still
+	 * open are closed before the RTF group is. */
+	embed_close(&s, &e);
+	free(e.stack);
+	free(e.open);
 
 	sink_put(&s, "}", 1);
 

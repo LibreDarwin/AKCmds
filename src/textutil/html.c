@@ -253,20 +253,151 @@ plan_space_run(size_t n, enum space_where where, struct space_plan *pl)
 	pl->inside = pl->extra + 2 * pl->pairs + pl->closing > 0;
 }
 
-/* One region of blanks and tabs, p[i] through p[j).  A tab keeps the place it
- * was typed in and is written as a tab of its own, which the reference does too,
- * but it is not a space, so it does not enter the pairs: it neither makes one
- * more nor turns an odd run even.  A tab also moves the region off the head of
- * its line, so a run that would have led a line is treated as one between two
- * words instead, and a blank line that starts with a tab closes like a run at
- * the end of a line rather than filling. */
+/* The levels a run is under, the spans that are open for them, and the classes
+ * the levels a run opens with are written as.  The outermost level of a run is
+ * given a class of its own, because that is the one a reader is most likely to
+ * meet again; the levels inside it are written as a style, since they name
+ * nothing the outer level has not already said.  The classes are handed out in
+ * the order the four controls are first seen, so s1 is whichever direction the
+ * first embedding of the document reads. */
+struct html_embed {
+	unsigned long *stack;	/* the levels the text is under */
+	unsigned long *open;	/* the levels the open spans are for */
+	size_t dep;		/* how deep the stack is */
+	size_t room;		/* how deep it can be */
+	size_t shown;		/* how many spans are open */
+	int cls[4];		/* the class each of the four openers has */
+	int ncls;		/* how many of them there are */
+};
+
+/* The four controls that open a level, in code point order. */
+static const unsigned long embed_openers[4] = {
+	0x202A, 0x202B, 0x202D, 0x202E,
+};
+
+static int
+embed_which(unsigned long cp)
+{
+	for (int k = 0; k < 4; k++)
+		if (embed_openers[k] == cp)
+			return k;
+	return -1;
+}
+
+/* One more level, keeping room for it.  The nesting is not capped, so the
+ * stack grows with it.  The list the open spans are for is kept the same size
+ * so that a level in force can be written down as one that is open without
+ * either list having to grow again. */
+static void
+embed_push(struct html_embed *e, unsigned long cp)
+{
+	if (e->dep == e->room) {
+		size_t room = e->room + 8;
+		unsigned long *stack = realloc(e->stack, room * sizeof(*stack));
+		unsigned long *open = stack ? realloc(e->open, room * sizeof(*open))
+					    : NULL;
+
+		if (open == NULL) {
+			free(stack);
+			return;		/* out of memory; the level is lost */
+		}
+		e->stack = stack;
+		e->open = open;
+		e->room = room;
+	}
+	e->stack[e->dep++] = cp;
+}
+
+/* The span for a level: a class for the outermost, a style for the rest. */
+static void
+embed_open(struct sink *s, struct html_embed *e, unsigned long cp, int outer)
+{
+	if (!outer) {
+		sink_str(s, "<span style=\"");
+		sink_str(s, tu_bidi_css(cp));
+		sink_str(s, "\">");
+		return;
+	}
+	{
+		int k = embed_which(cp);
+
+		if (e->cls[k] == 0)
+			e->cls[k] = ++e->ncls;
+		sink_str(s, "<span class=\"s");
+		sink_put(s, (const char *)&(char){ (char)('0' + e->cls[k]) }, 1);
+		sink_str(s, "\">");
+	}
+}
+
+static void
+embed_close(struct sink *s, struct html_embed *e)
+{
+	while (e->shown > 0) {
+		sink_str(s, "</span>");
+		e->shown--;
+	}
+}
+
+/* Bring the spans that are open into line with the levels that are.  The
+ * reference tool writes none of the levels a run and the next one share, so
+ * this closes every span and opens every level again from the outermost.  Text
+ * that is under the levels the open spans already say goes on inside them, so
+ * a run of text is not broken up by a control that says nothing about it, and
+ * neither is it broken up by a level that opens and closes around it. */
+static void
+embed_sync(struct sink *s, struct html_embed *e)
+{
+	size_t k = 0;
+
+	while (k < e->dep && k < e->shown && e->open[k] == e->stack[k])
+		k++;
+	if (k == e->dep && k == e->shown)
+		return;
+	embed_close(s, e);
+	for (k = 0; k < e->dep; k++)
+		embed_open(s, e, e->stack[k], k == 0);
+	memcpy(e->open, e->stack, e->dep * sizeof(*e->stack));
+	e->shown = e->dep;
+}
+
+/* Whether the levels in force are not the ones the open spans are for, which is
+ * what a call to embed_sync would act on.  A level that opens and one that
+ * closes around nothing leave the two the same, so a run of text between them
+ * goes on inside the spans it was already in. */
+static int
+embed_stale(const struct html_embed *e)
+{
+	size_t k = 0;
+
+	while (k < e->dep && k < e->shown && e->open[k] == e->stack[k])
+		k++;
+	return k != e->dep || k != e->shown;
+}
+
+/* One region of blanks and tabs, p[i] through p[j), which may hold levels
+ * between its blanks.  A tab keeps the place it was typed in and is written as a
+ * tab of its own, which the reference does too, but it is not a space, so it
+ * does not enter the pairs: it neither makes one more nor turns an odd run
+ * even.  A tab also moves the region off the head of its line, so a run that
+ * would have led a line is treated as one between two words instead, and a blank
+ * line that starts with a tab closes like a run at the end of a line rather than
+ * filling.
+ *
+ * A level in the middle of a region says nothing about how its blanks are
+ * counted, so the pairs are worked out over the whole of it; only the markup is
+ * cut at the level.  The level is not acted on when it is read, since a level
+ * that opens and one that closes around nothing but spaces leave the spans as
+ * they were, and the spans are brought into line only when a space is written
+ * and the stack has moved.  A space that is written as typed opens no span of
+ * its own, so one that follows a level lands outside the span the level left
+ * open, while one that follows a no-break space stays inside it. */
 static void
 emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
-    enum space_where where, int *used_tab)
+    enum space_where where, int *used_tab, struct html_embed *e)
 {
 	struct space_plan pl;
 	size_t nspaces = 0, written = 0, inside = 0;
-	int open = 0;
+	int open = 0, moved = 0;
 
 	for (size_t k = i; k < j; k++)
 		if (p[k] == ' ')
@@ -278,15 +409,43 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
 			where = SPACE_TAIL;
 	}
 	plan_space_run(nspaces, where, &pl);
+	/* text earlier in the line may have left a level the spans have not
+	 * caught up with yet */
+	embed_sync(s, e);
 
 	for (size_t k = i; k < j; k++) {
-		if (p[k] == '\t') {
-			/* the tab is inside the span once a space of the span has
-			 * been written, and it is left there after the last */
-			if (inside > 0 && !open) {
-				sink_str(s, "<span class=\"Apple-converted-space\">");
-				open = 1;
+		unsigned long cp = tu_bidi_embed((const unsigned char *)p + k, j - k);
+		int breaks;
+
+		if (cp != 0) {
+			if (cp == 0x202C) {
+				if (e->dep > 0)
+					e->dep--;
+			} else {
+				embed_push(e, cp);
 			}
+			moved = 1;
+			k += 2;
+			continue;
+		}
+		if (moved) {
+			/* the span of no-break spaces ends at the level, and
+			 * the spans that say which level this is open only now
+			 * that a space is written into them; a level that
+			 * opened and one that closed leave both as they were */
+			if (embed_stale(e)) {
+				if (open) {
+					sink_str(s, "</span>");
+					open = 0;
+				}
+				embed_sync(s, e);
+			}
+			moved = 0;
+		}
+		if (p[k] == '\t') {
+			/* the tab is inside the span of no-break spaces only
+			 * while that span is still open, and is left there
+			 * after the last space of it */
 			sink_str(s, "<span class=\"Apple-tab-span\">\t</span>");
 			*used_tab = 1;
 			continue;
@@ -302,16 +461,78 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
 		}
 		if (!pl.inside)
 			continue;	/* a single space between two words */
+		breaks = space_is_breaks(&pl, inside);
+		if (!breaks && !open) {
+			/* a space as typed is left outside the span, so one that
+			 * follows a level stays out of the one just closed; it
+			 * still counts towards the pairs that follow it */
+			sink_put(s, " ", 1);
+			inside++;
+			written++;
+			continue;
+		}
 		if (!open) {
 			sink_str(s, "<span class=\"Apple-converted-space\">");
 			open = 1;
 		}
-		sink_str(s, space_is_breaks(&pl, inside) ? "\xc2\xa0" : " ");
+		sink_str(s, breaks ? "\xc2\xa0" : " ");
 		inside++;
 		written++;
 	}
+	if (moved) {
+		/* a level with no space after it in this region, and the
+		 * reference writes none of it */
+		embed_close(s, e);
+	}
 	if (open)
 		sink_str(s, "</span>");
+}
+
+/* Whether p[i] is nothing but the levels a run is under, and whether p[j] is
+ * followed by nothing but the levels a run is under and blanks.  A run of
+ * spaces is at the head of a line when only levels come before it, and at the
+ * tail when neither levels nor blanks come after it. */
+static int
+opens_line(const char *p, size_t i)
+{
+	while (i >= 3 && tu_bidi_embed((const unsigned char *)p + i - 3, 3) != 0)
+		i -= 3;
+	return i == 0;
+}
+
+static int
+ends_line(const char *p, size_t n, size_t j)
+{
+	while (j < n) {
+		if (tu_bidi_embed((const unsigned char *)p + j, n - j) != 0) {
+			j += 3;
+			continue;
+		}
+		if (p[j] != ' ' && p[j] != '\t')
+			return 0;
+		j++;
+	}
+	return 1;
+}
+
+/* Whether a line has anything the reader is shown once the levels in it are
+ * taken out for the spans that will say what each run of text was under.  A
+ * line of levels and nothing else is a blank line to the reference tool, and
+ * one of them and blanks is a blank line with a run of text in it, so neither
+ * needs a paragraph of its own kind.  The other C0 controls are different: the
+ * line they are on is a paragraph that is empty once they are gone, and it
+ * takes a class of its own, so they are not looked for here. */
+static int
+has_shown(const char *p, size_t n)
+{
+	size_t i = 0;
+
+	while (i < n) {
+		if (tu_bidi_embed((const unsigned char *)p + i, n - i) == 0)
+			return 1;
+		i += 3;
+	}
+	return 0;
 }
 
 /* One paragraph's worth of line content.  Sets *used_tab when a tab was
@@ -321,53 +542,118 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
  * because a line of nothing but controls is not a blank line to the reference
  * tool: it asks for a class of its own and writes a paragraph that is empty
  * once the controls are gone.  Only tab, line feed and carriage return are text
- * of their own, and U+007F is kept. */
+ * of their own, and U+007F is kept.
+ *
+ * The levels are dropped too, and what each run of text was under is written as
+ * the spans around it.  A level that opens and one that closes say nothing
+ * about the text that follows until some text does follow, so the spans they
+ * would have changed are closed when that text comes rather than when the level
+ * is read.  A form feed is no account to any of this: it is one of the C0
+ * controls, and neither ends a run of text nor changes a level. */
 static void
-emit_line_body(struct sink *s, const char *p, size_t n, int *used_tab)
+emit_line_body(struct sink *s, const char *p, size_t n, struct html_embed *e,
+    int *used_tab)
 {
 	size_t i = 0;
 
 	while (i < n) {
 		unsigned char c = (unsigned char)p[i];
+		unsigned long cp = tu_bidi_embed((const unsigned char *)p + i, n - i);
 
+		if (cp != 0) {
+			if (cp == 0x202C) {
+				if (e->dep > 0)
+					e->dep--;
+			} else {
+				embed_push(e, cp);
+			}
+			i += 3;
+			continue;
+		}
 		if (c == ' ' || c == '\t') {
 			size_t j = i;
 			enum space_where where;
+			int head, tail;
 
-			while (j < n && (p[j] == ' ' || p[j] == '\t'))
-				j++;
-			if (i == 0 && j == n)
+			/* a level between two blanks is of no account to
+			 * them, so a region runs on through one */
+			while (j < n) {
+				if (p[j] == ' ' || p[j] == '\t') {
+					j++;
+					continue;
+				}
+				if (tu_bidi_embed((const unsigned char *)p + j,
+				    n - j) == 0)
+					break;
+				j += 3;
+			}
+			head = opens_line(p, i);
+			tail = ends_line(p, n, j);
+			if (head && tail)
 				where = SPACE_BLANK;
-			else if (i == 0)
+			else if (head)
 				where = SPACE_LEAD;
-			else if (j == n)
+			else if (tail)
 				where = SPACE_TAIL;
 			else
 				where = SPACE_MID;
-			emit_space_region(s, p, i, j, where, used_tab);
+			emit_space_region(s, p, i, j, where, used_tab, e);
 			i = j;
 		} else if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
-			i++;		/* a control of no account to the writer */
+			/* A control of no account to the writer, and none to the
+			 * levels either: the spans the levels want are opened
+			 * as they are and left with nothing in them. */
+			embed_sync(s, e);
+			i++;
 		} else {
+			embed_sync(s, e);
 			emit_escaped(s, &p[i], 1);
 			i++;
 		}
 	}
+	embed_close(s, e);
+	/* A paragraph ends with no levels open, however many were open at its
+	 * end: the next paragraph begins at the left whatever this one did. */
+	e->dep = 0;
+}
+
+/* The first byte of the line at or after k that a reader is shown, which is
+ * the byte after any run of controls and marks: the reference tool takes those
+ * out before it looks for the end of a line, so a carriage return and a line
+ * feed with nothing but a level between them are still one terminator. */
+static size_t
+line_shown(const char *text, size_t len, size_t k)
+{
+	while (k < len) {
+		if (tu_bidi_embed((const unsigned char *)text + k, len - k) != 0 ||
+		    tu_bidi_open((const unsigned char *)text + k, len - k) != 0) {
+			k += 3;
+			continue;
+		}
+		break;
+	}
+	return k;
 }
 
 /* Where the line starting at pos ends, and how many bytes it occupies.  A
- * CR, an LF and a CRLF pair each end a line and each count once. */
+ * CR, an LF and a CRLF pair each end a line and each count once, and the levels
+ * and marks in between are of no account to which of them it is. */
 static size_t
 line_at(const char *text, size_t len, size_t pos, size_t *adv)
 {
-	size_t i = pos;
+	size_t i = line_shown(text, len, pos), end;
 
 	while (i < len && text[i] != '\n' && text[i] != '\r')
-		i++;
+		i = line_shown(text, len, i + 1);
+	end = i;
 	*adv = i - pos + 1;
-	if (i < len && text[i] == '\r' && i + 1 < len && text[i + 1] == '\n')
-		*adv = i - pos + 2;	/* the pair is one terminator */
-	return i - pos;
+	if (i < len && text[i] == '\r') {
+		size_t j = line_shown(text, len, i + 1);
+
+		if (j < len && text[j] == '\n')
+			*adv = j - pos + 1;	/* the pair is one terminator */
+	}
+	return end - pos;
 }
 
 /* How many lines the text holds.  A trailing terminator closes the last line
@@ -403,6 +689,11 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	 * line with text on it, format 1 a line with none. */
 	int cls[2] = { 0, 0 }, ncls = 0;
 	int used_tab = 0;
+	/* The levels are counted for the whole document, because the classes the
+	 * outermost of them are written as are handed out in the order the
+	 * document first needed them, but a paragraph always starts and ends
+	 * with none of them open. */
+	struct html_embed embed = { NULL, NULL, 0, 0, 0, { 0, 0, 0, 0 }, 0 };
 	FILE *fp;
 	char *outbuf = NULL;
 	size_t outlen = 0;
@@ -413,7 +704,7 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	while (n < want) {
 		size_t adv, linelen = line_at(text, len, pos, &adv);
 		size_t mark, shown;
-		int blank = 1, fmt, c, rtl, drop;
+		int blank = 1, fmt, c, rtl, drop, vis;
 
 		/* A line that begins with a mark saying which way to read is written
 		 * with the mark left out and, since the mark is what named the
@@ -425,16 +716,29 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		rtl = tu_bidi_first((const unsigned char *)text + pos, linelen) != 0;
 		mark = tu_bidi_mark((const unsigned char *)text + pos, linelen);
 		shown = linelen - mark;
-		drop = shown == 0 && pos + linelen >= len;
+		vis = has_shown(text + pos + mark, shown);
+		drop = !vis && pos + linelen >= len;
 
 		/* Whether the line is blank is asked of what is left of it, the mark
 		 * not being something the reader is shown and so not room the line
-		 * takes up: a line of one mark and one space is a blank line. */
-		for (size_t k = mark; k < linelen; k++)
+		 * takes up: a line of one mark and one space is a blank line.  A
+		 * level is not room a line takes up either, so a line of levels
+		 * and nothing else is a blank line as well -- and so is one of
+		 * levels and blanks, which is where the levels differ from the
+		 * other C0 controls, a line of those being a paragraph empty but
+		 * for them. */
+		for (size_t k = mark; k < linelen; ) {
+			if (tu_bidi_embed((const unsigned char *)text + pos + k,
+			    linelen - k) != 0) {
+				k += 3;
+				continue;
+			}
 			if (text[pos + k] != ' ' && text[pos + k] != '\t') {
 				blank = 0;
 				break;
 			}
+			k++;
+		}
 		fmt = blank ? 1 : 0;
 		if (!drop) {
 			if (cls[fmt] == 0)
@@ -446,11 +750,12 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 				sink_str(&body, " dir=\"rtl\"");
 			sink_str(&body, " class=\"p");
 			sink_put(&body, (const char *)&(char){ (char)('0' + c) }, 1);
-			if (shown == 0) {
+			if (!vis) {
 				sink_str(&body, "\"><br></p>\n");
 			} else {
 				sink_str(&body, "\">");
-				emit_line_body(&body, text + pos + mark, shown, &used_tab);
+				emit_line_body(&body, text + pos + mark, shown,
+				    &embed, &used_tab);
 				sink_str(&body, "</p>\n");
 			}
 		}
@@ -527,12 +832,27 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 			sink_str(&s, "; min-height: 14.0px");
 		sink_str(&s, "}\n");
 	}
+	/* A level is only preserved if the stylesheet says so.  The classes are
+	 * in the order the document first needed them, like the paragraphs'. */
+	for (int c = 1; c <= embed.ncls; c++) {
+		for (int k = 0; k < 4; k++) {
+			if (embed.cls[k] != c)
+				continue;
+			sink_str(&s, "    span.s");
+			sink_put(&s, (const char *)&(char){ (char)('0' + c) }, 1);
+			sink_str(&s, " {");
+			sink_str(&s, tu_bidi_css(embed_openers[k]));
+			sink_str(&s, "}\n");
+		}
+	}
 	/* A tab is only preserved if the stylesheet says so. */
 	if (used_tab)
 		sink_str(&s, "    span.Apple-tab-span {white-space:pre}\n");
 	sink_str(&s, head_after_style);
 	sink_put(&s, body.buf != NULL ? body.buf : "", body.len);
 	sink_str(&s, tail);
+	free(embed.stack);
+	free(embed.open);
 	free(body.buf);
 
 	if (s.failed) {

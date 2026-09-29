@@ -739,3 +739,98 @@ size_t tu_bidi_mark(const unsigned char *p, size_t n)
 {
 	return tu_bidi_open(p, n) ? 3 : 0;
 }
+
+/* The explicit embedding and override controls: U+202A opens a left to right
+ * embedding, U+202B a right to left one, U+202C ends the innermost one, U+202D
+ * opens a left to right override and U+202E a right to left one.  Returns the
+ * control at the head of p, or 0 when there is none.
+ *
+ * These are not shown to a reader either, but unlike the marks above they are
+ * not dropped: each one is a direction given to the text it covers rather than
+ * the whole paragraph, and the three writers record it three ways.  The
+ * reference tool takes them out of the text and puts them on the characters
+ * they cover, so a run of text comes out carrying the stack of controls that
+ * were open when it was read, and a run ends wherever that stack changes.  A
+ * writer that has no way to record the direction still splits its runs there,
+ * which is all the reference does in the case of WordML. */
+unsigned long tu_bidi_embed(const unsigned char *p, size_t n)
+{
+	if (n < 3 || p[0] != 0xE2 || p[1] != 0x80)
+		return 0;
+	switch (p[2]) {
+	case 0xAA:
+		return 0x202A;
+	case 0xAB:
+		return 0x202B;
+	case 0xAC:
+		return 0x202C;
+	case 0xAD:
+		return 0x202D;
+	case 0xAE:
+		return 0x202E;
+	}
+	return 0;
+}
+
+/* The CSS an embedding level of that stack is written as, which the HTML writer
+ * puts in its stylesheet for the outermost level of a run and inline for the
+ * ones nested inside it.  A control that ends a level has no CSS of its own,
+ * and neither does anything that is not one of the four. */
+const char *tu_bidi_css(unsigned long cp)
+{
+	switch (cp) {
+	case 0x202A:
+		return "direction: ltr; unicode-bidi: embed";
+	case 0x202B:
+		return "direction: rtl; unicode-bidi: embed";
+	case 0x202D:
+		return "direction: ltr; unicode-bidi: bidi-override";
+	case 0x202E:
+		return "direction: rtl; unicode-bidi: bidi-override";
+	}
+	return NULL;
+}
+
+/* How much of two stacks of open embedding levels is still the same, which is
+ * the depth a run has to come back to before it can be written.  Two levels of
+ * the same depth but opposite directions are not the same level, so this walks
+ * the controls and not just the count. */
+size_t
+tu_bidi_common(const unsigned long *a, size_t na,
+    const unsigned long *b, size_t nb)
+{
+	size_t k = 0;
+
+	while (k < na && k < nb && a[k] == b[k])
+		k++;
+	return k;
+}
+
+/* Whether the paragraph opening at the head of this text is written at all,
+ * which is also the question of whether the document as a whole has anything in
+ * it to write.  A mark opening a paragraph says only which way that paragraph
+ * reads, and an embedding control is a direction given to the text around it
+ * rather than a character, so a paragraph with neither text of its own nor a
+ * paragraph mark to close it is not written, and takes no properties with it.
+ * A mark is only opening the paragraph when nothing at all comes before it: an
+ * embedding control before it says something about the text that follows, and
+ * the mark then reads as text of its own.  A paragraph mark settles the
+ * question the other way, since a paragraph is written to be closed. */
+int
+tu_bidi_para(const unsigned char *p, size_t len)
+{
+	size_t i = 0;
+
+	while (i < len) {
+		if (i == 0 && tu_bidi_open(p, len) != 0) {
+			i += 3;
+			continue;
+		}
+		if (tu_bidi_embed(p + i, len - i) != 0) {
+			i += 3;
+			continue;
+		}
+		return 1;
+	}
+	return 0;
+}

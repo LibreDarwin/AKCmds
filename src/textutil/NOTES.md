@@ -418,6 +418,40 @@ format whose name is not the extension an output file of it is given.
 The one thing this writer cannot reproduce is anything the *reader* recorded
 about the document rather than its text; see the divergences below.
 
+## The embedding controls are a level the text is under, not a character
+
+`U+202A` to `U+202E` say which way the text they cover reads rather than being
+shown to the reader, so all three writers take them out of the text and keep the
+stack they build instead. The stack starts empty at each paragraph and a
+paragraph that is nothing but controls is not written at all, which is the same
+answer a paragraph that is nothing but a mark gets.
+
+The stack is not compared by how deep it is but by **what is in it**, and that is
+the whole of the rule: text is split into runs wherever the stack changes, and
+text either side of a control that leaves the stack and comes back is one run
+and not two. A control that opens a level nothing is ever written under is
+opened and closed again with no text between, and so contributes nothing.
+
+Each writer says a run boundary in its own way.
+
+- **WordML** drops the control and writes one `<w:r>` per run. It has nowhere to
+  record the direction, so the run properties do not change at a boundary. An
+  empty paragraph is a single empty run, and a paragraph whose text still had a
+  level open over its last run is closed with an empty run after it.
+- **RTF** keeps the control and writes it as an escape: the level's own code
+  point to open one, and `U+202C` to close one, each with its own `\uc0`. The
+  levels open are tracked separately from the levels the text is under and
+  brought into line with them only when text is written, which is what makes the
+  open-and-close-a-level-with-no-text-between case write nothing. A page break is
+  a boundary of its own: it closes every level the reader was told of, and keeps
+  them, so the text after it is written as if they were still open and a later
+  control, or the end of the paragraph, closes them again.
+- **HTML** names the direction rather than keeping the control. The outermost
+  level of a paragraph's stack gets a class of its own, in order of first use,
+  and a level inside it gets an inline style. A run of no-break spaces spans
+  whatever levels the text around it is under, and only the markup is cut where
+  the levels change.
+
 ## Divergences
 
 These are the known points where this port does not do what the reference tool
@@ -474,15 +508,6 @@ a feature that exists on both sides.
   database is consulted.
 - **`-excludedelements`** selects an XHTML serialisation that is not
   implemented; the argument is parsed and validated.
-- **The embedding controls U+202A to U+202E are passed through as text.** Each
-  writer has its own use for them and none of it is done here. The HTML writer
-  drops the control and wraps what it covered in a span, the WordML writer drops
-  it and splits the run, and the RTF writer keeps it as an escape and appends
-  the U+202C that ends the embedding at the end of the paragraph. A paragraph
-  that is nothing but a control is an empty paragraph in all three. What the
-  port does instead is write the control itself, so every writer differs from
-  the reference on input that carries one. The mark that opens a paragraph is a
-  different character and is already handled by all three writers.
 - **Six HTML cases where a C0 control sits between two spaces differ.** These
   are the last of a broad differential over the C0 controls, which agrees
   772 times out of 778. The six are not covered by the harness and the port's
@@ -508,7 +533,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 939 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 963 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
@@ -526,6 +551,12 @@ own, the three characters escaped and the quote that is not, the empty document,
 both metadata times, the font families and the sizes in half-points, and the
 naming of an output with no `-output` at all. They are plain text inputs, for
 the reason given in the divergences above.
+
+The embedding controls are held to all three writers at once, by eight fixtures
+that cover a level around one stretch and round a whole paragraph, a level
+nested inside another with both closed one at a time, a level opened and closed
+with no text between it, a level the text never closes, and a page break with a
+level either side of it and one with a level inside it.
 
 The readers are covered at the end of the suite. Each reads a file that was
 written once by the reference tool into a template, which every case then

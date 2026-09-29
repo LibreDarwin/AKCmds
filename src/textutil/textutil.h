@@ -224,6 +224,22 @@ unsigned long tu_bidi_first(const unsigned char *p, size_t n);
 unsigned long tu_bidi_open(const unsigned char *p, size_t n);
 size_t tu_bidi_mark(const unsigned char *p, size_t n);
 
+/* The explicit embedding and override control at the head of p: U+202A to
+ * U+202E, or 0 when there is none.  Each one is a direction given to the text
+ * it covers rather than to the whole paragraph, so it is taken out of the text
+ * and put on a run, and a run ends wherever the controls open at that point
+ * differ from the ones open at the last.  The CSS an open level is written as
+ * in HTML, or NULL for the control that closes a level and for anything that is
+ * not one of the four that open one.  See src/textutil/bidi.c. */
+unsigned long tu_bidi_embed(const unsigned char *p, size_t n);
+const char *tu_bidi_css(unsigned long cp);
+
+/* Whether a paragraph whose text begins at p is written at all, which is also
+ * whether the document as a whole has anything in it to write: 1 when the text
+ * has a byte of its own or a paragraph mark, 0 when it is nothing but a leading
+ * mark and embedding controls.  See src/textutil/rtf.c and wordml.c. */
+int tu_bidi_para(const unsigned char *p, size_t n);
+
 /* Writers.  Each returns 0 on success and -1 on failure, having already
  * reported the reason to stderr.  -encoding applies to the text and HTML
  * writers, which hold their whole output in memory and so encode it just

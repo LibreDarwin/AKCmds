@@ -198,6 +198,26 @@ mkfix() {
     printf '\xe2\x80\x8fA\nB\n' >"$d/bidimarkhead.txt"
     printf '\xe2\x80\x8f\xe2\x80\x8fA\n\xe2\x80\x8e\xe2\x80\x8eB\n' \
         >"$d/bidimarktwice.txt"
+    # The embedding controls are directions too, but unlike the two marks they
+    # can open over a stretch of the text and nest, so no writer is told a
+    # paragraph's direction by one alone: the RTF and WordML writers keep them
+    # as levels and cut a run where the levels over the text change, and the
+    # HTML writer names each stretch in a style.  embedone is a level around
+    # one stretch and embedall one round the whole paragraph; embednest opens
+    # one inside another and closes them one at a time, and embedtwo is the
+    # nesting pair.  embedmerge opens and closes a level with no text between
+    # it, which leaves the text either side under one level and not two, and
+    # embedopen is a level the text never closes.  The two page breaks are a
+    # level either side of one, which takes the reader's state with it, and a
+    # level with the break inside it.
+    printf 'A\xe2\x80\xaaB\xe2\x80\xacC\n' >"$d/embedone.txt"
+    printf '\xe2\x80\xaaA\xe2\x80\xac\n' >"$d/embedall.txt"
+    printf 'A\xe2\x80\xabB\xe2\x80\xacC\xe2\x80\xacD\n' >"$d/embednest.txt"
+    printf '\xe2\x80\xaaA\xe2\x80\xac\xe2\x80\xaaB\xe2\x80\xac\n' >"$d/embedmerge.txt"
+    printf '\xe2\x80\xaaA\xe2\x80\xaaB\xe2\x80\xac\xe2\x80\xac\n' >"$d/embedtwo.txt"
+    printf 'A\xe2\x80\xaaB\n' >"$d/embedopen.txt"
+    printf '\xe2\x80\xaaA\fB\n' >"$d/embedpage.txt"
+    printf '\xe2\x80\xaa\f\xe2\x80\xacA\n' >"$d/embedpage2.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
@@ -786,6 +806,17 @@ done
 # leaves no word to write.  The three shapes above settle the HTML writer's
 # side of this; these settle the other two.
 for f in bidimark bidimarkhead bidimarktwice; do
+    check "convert rtf $f" -convert rtf "$f.txt"
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
+done
+
+# The embedding controls are held to all three writers at once, since it is the
+# one thing they agree on how to write: the level each stretch of text is under,
+# and where the text either side of a control that leaves the stack and comes
+# back is one run and not two.
+for f in embedone embedall embednest embedmerge embedtwo embedopen \
+    embedpage embedpage2; do
+    check "convert html $f" -convert html "$f.txt"
     check "convert rtf $f" -convert rtf "$f.txt"
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done

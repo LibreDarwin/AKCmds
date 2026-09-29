@@ -251,10 +251,24 @@ tu_write_wordml(const tu_doc_t *d, const char *path,
 				i++;
 				continue;
 			}
-			fputs("<w:p><w:pPr></w:pPr><w:r>", f);
-			wml_rpr(f, &face, points);
-			wml_run(f, p + start, i - start);
-			fputs("</w:r></w:p>", f);
+			/* A mark that opens the paragraph says which way it reads
+			 * and is not text, so it goes into the paragraph's
+			 * properties instead of into its run.  Only the
+			 * right-to-left one is recorded: the left-to-right mark
+			 * names a direction the paragraph already has. */
+			{
+				unsigned long bm = tu_bidi_open(
+				    (const unsigned char *)p + start, i - start);
+				size_t head = start + (bm != 0 ? 3 : 0);
+
+				fputs("<w:p><w:pPr>", f);
+				if (bm == 0x200F)
+					fputs("<w:bidi/>", f);
+				fputs("</w:pPr><w:r>", f);
+				wml_rpr(f, &face, points);
+				wml_run(f, p + head, i - head);
+				fputs("</w:r></w:p>", f);
+			}
 			if (i == len)
 				break;
 			start = i + (mark != 0 ? mark : 3);

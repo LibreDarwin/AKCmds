@@ -713,6 +713,20 @@ unsigned long tu_bidi_first(const unsigned char *p, size_t n)
 	return 0;
 }
 
+/* The mark a line opens with, when it opens with one: U+200E, U+200F, or 0
+ * when it does not.  Which of the two it is matters as much as whether there
+ * is one -- the right-to-left mark names a direction, the left-to-right one
+ * only says that a direction was named -- so the writers that record the
+ * difference ask for the mark rather than for its length. */
+unsigned long tu_bidi_open(const unsigned char *p, size_t n)
+{
+	if (n >= 3 && p[0] == 0xE2 && p[1] == 0x80 && p[2] == 0x8E)
+		return 0x200E;
+	if (n >= 3 && p[0] == 0xE2 && p[1] == 0x80 && p[2] == 0x8F)
+		return 0x200F;
+	return 0;
+}
+
 /* The number of bytes at the head of a line that are a mark telling a reader
  * which way to read rather than text, and so are left out of a line that
  * begins with one.  A left or right to left mark is one of these wherever it
@@ -723,8 +737,5 @@ unsigned long tu_bidi_first(const unsigned char *p, size_t n)
  * front of the text as a whole rather than off each of its lines. */
 size_t tu_bidi_mark(const unsigned char *p, size_t n)
 {
-	if (n >= 3 && p[0] == 0xE2 && p[1] == 0x80 &&
-	    (p[2] == 0x8E || p[2] == 0x8F))
-		return 3;
-	return 0;
+	return tu_bidi_open(p, n) ? 3 : 0;
 }

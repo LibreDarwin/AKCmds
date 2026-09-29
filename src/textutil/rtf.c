@@ -37,10 +37,19 @@ static const char envelope_post[] =
     "{\\colortbl;\\red255\\green255\\blue255;}\n"
     "{\\*\\expandedcolortbl;;}\n";
 
-static const char tab_stops[] =
+static const char tx_stops[] =
     "\\tx560\\tx1120\\tx1680\\tx2240\\tx2800\\tx3360\\tx3920\\tx4480"
-    "\\tx5040\\tx5600\\tx6160\\tx6720\\pardirnatural\\partightenfactor0\n"
-    "\n";
+    "\\tx5040\\tx5600\\tx6160\\tx6720";
+
+/* What goes between the tab stops and \partightenfactor0, by the mark the
+ * paragraph opened with.  A paragraph that opened with a right-to-left mark
+ * reads right to left and says so; one that opened with a left-to-right mark
+ * said which way to read too, and the reference tool records having been told
+ * by writing no direction word at all rather than the one for left to right.
+ * Everything else is left to right by default, which is spelled out. */
+static const char dir_natural[] = "\\pardirnatural";
+static const char dir_right[] = "\\rtlpar\\qr";
+static const char dir_named[] = "";
 
 struct sink {
 	char *buf;
@@ -88,6 +97,42 @@ sink_uescape(struct sink *s, unsigned long u)
 	char tmp[24];
 
 	snprintf(tmp, sizeof(tmp), "\\u%lu ", u);
+	sink_str(s, tmp);
+}
+
+/* A paragraph's properties are written out when they are first needed and
+ * again whenever they change, so a run of paragraphs that agree writes the
+ * block once.  The first one is followed by a blank line, because it opens the
+ * document's text; a later one is not, because it is written inside text that
+ * has already begun. */
+static void
+put_pard(struct sink *s, const char *dir, int first)
+{
+	sink_str(s, "\\pard");
+	sink_str(s, tx_stops);
+	sink_str(s, dir);
+	sink_str(s, "\\partightenfactor0\n");
+	if (first)
+		sink_put(s, "\n", 1);
+}
+
+/* The run's own properties, which every paragraph shares and so are written
+ * once, into the first paragraph, rather than repeated per paragraph. */
+static void
+put_run_props(struct sink *s, const tu_font_t *face, int points)
+{
+	char tmp[24];
+
+	/* A bold or italic face sets a run attribute, and where both are set the
+	 * oblique one comes first. */
+	if (face->italic)
+		sink_str(s, "\\f0\\i");
+	else
+		sink_str(s, "\\f0");
+	if (face->bold)
+		sink_str(s, "\\b");
+	/* RTF sizes are in half points. */
+	snprintf(tmp, sizeof(tmp), "\\fs%d", points * 2);
 	sink_str(s, tmp);
 }
 
@@ -343,6 +388,12 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	size_t len = 0;
 	tu_font_t face;
 	int points = 12;
+	/* A mark that opens a paragraph says which way that paragraph reads, and
+	 * is not itself text, so it is dropped from the body.  The direction it
+	 * names is written into the paragraph's properties instead. */
+	int at_para = 1;
+	int have_pard = 0;
+	const char *last_dir = NULL;
 
 	tu_font_face(st != NULL ? st->font : NULL, &face);
 	if (st != NULL && st->fontsize > 0)
@@ -365,33 +416,50 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	 * written whenever any metadata was given at all, an empty value
 	 * included.  With none there is no group, not an empty one. */
 	write_info(&s, meta);
-	if (!empty) {
-		sink_str(&s, "\\pard");
-		sink_str(&s, tab_stops);
-		sink_str(&s, "\\f0");
-		/* A bold or italic face sets a run attribute, and where both are
-		 * set the oblique one comes first. */
-		if (face.italic)
-			sink_str(&s, "\\i");
-		if (face.bold)
-			sink_str(&s, "\\b");
-		sink_str(&s, "\\fs");
-		{
-			char tmp[24];
-
-			/* RTF sizes are in half points. */
-			snprintf(tmp, sizeof(tmp), "%d", points * 2);
-			sink_str(&s, tmp);
-		}
-		sink_str(&s, " \\cf0 ");
-	}
 
 	len = d->len;
 
 	while (i < len) {
-		unsigned char c = p[i];
+		unsigned char c;
 		unsigned long cp;
 		size_t seq = 1;
+
+		/* The head of a paragraph is where a mark naming its direction
+		 * would sit, and where its properties are written.  The properties
+		 * are only written when they differ from the paragraph before, which
+		 * is what lets a document of many paragraphs that agree carry one
+		 * block rather than one per paragraph. */
+		if (at_para) {
+			unsigned long m = tu_bidi_open(p + i, len - i);
+			const char *dir;
+
+			at_para = 0;
+			dir = m == 0x200F ? dir_right
+			    : m == 0x200E ? dir_named : dir_natural;
+			if (!have_pard || strcmp(dir, last_dir) != 0) {
+				put_pard(&s, dir, !have_pard);
+				if (have_pard) {
+					/* The run's properties were written into
+					 * the first paragraph; a later one restates
+					 * only the colour, which the new \pard has
+					 * put back to its default. */
+					sink_str(&s, "\\cf0 ");
+				} else {
+					put_run_props(&s, &face, points);
+					sink_str(&s, " \\cf0 ");
+				}
+				have_pard = 1;
+				last_dir = dir;
+			}
+			/* The mark itself is not shown to the reader. */
+			if (m != 0)
+				i += 3;
+		}
+
+		if (i >= len)
+			break;
+
+		c = p[i];
 
 		if (c < 0x80) {
 			cp = c;
@@ -470,8 +538,10 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		case '\n':
 			/* A backslash plus a raw newline: RTF's paragraph mark.  It ends
 			 * the paragraph, and with it whatever the previous one set up,
-			 * so the next paragraph that needs a \u escape says \uc0 again. */
+			 * so the next paragraph that needs a \u escape says \uc0 again,
+			 * and the next paragraph is a head that may open with a mark. */
 			wrote_uc0 = 0;
+			at_para = 1;
 			sink_put(&s, "\\\n", 2);
 			continue;
 		}

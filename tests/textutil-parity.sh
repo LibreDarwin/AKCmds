@@ -182,6 +182,22 @@ mkfix() {
         >"$d/bidi.txt"
     printf '\xe2\x80\x8f' >"$d/bidionly.txt"
     printf 'A\r\xe2\x80\x8f' >"$d/bidiend.txt"
+    # A mark that opens a paragraph is taken out of the text and put into the
+    # paragraph's properties, and there the two marks are not the same thing:
+    # the right-to-left one names the direction and is recorded, the
+    # left-to-right one names the direction the paragraph already had, which
+    # the reference tool records by writing no direction word at all.  RTF
+    # writes a paragraph's properties when they are first needed and again
+    # whenever they change, so a document that runs plain, right to left and
+    # plain again carries the block three times, and two paragraphs that agree
+    # carry one block between them.  bidimark is that shape, bidimarkhead opens
+    # with a mark rather than in the middle, and bidimarktwice has a line of two
+    # marks, of which only the first is the paragraph's.
+    printf 'A\n\xe2\x80\x8fB\nC\n\xe2\x80\x8eD\n\xe2\x80\x8fE\n\xe2\x80\x8fF\n' \
+        >"$d/bidimark.txt"
+    printf '\xe2\x80\x8fA\nB\n' >"$d/bidimarkhead.txt"
+    printf '\xe2\x80\x8f\xe2\x80\x8fA\n\xe2\x80\x8e\xe2\x80\x8eB\n' \
+        >"$d/bidimarktwice.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
@@ -760,6 +776,18 @@ done
 # settle all of this are checked against the HTML writer alone.
 for f in bidi bidionly bidiend; do
     check "convert html $f" -convert html "$f.txt"
+done
+
+# A mark at the head of a paragraph is how the RTF and WordML writers are told a
+# paragraph reads right to left, so unlike the HTML writer they are held to what
+# the reference does with one, and each writes the direction its own way:
+# \rtlpar in the paragraph properties, and w:bidi.  The left-to-right mark is
+# not the mirror of that -- it records having been told a direction, which
+# leaves no word to write.  The three shapes above settle the HTML writer's
+# side of this; these settle the other two.
+for f in bidimark bidimarkhead bidimarktwice; do
+    check "convert rtf $f" -convert rtf "$f.txt"
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 
 # ---------------------------------------------------------------------------

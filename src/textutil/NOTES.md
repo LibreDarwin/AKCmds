@@ -474,6 +474,22 @@ a feature that exists on both sides.
   database is consulted.
 - **`-excludedelements`** selects an XHTML serialisation that is not
   implemented; the argument is parsed and validated.
+- **The embedding controls U+202A to U+202E are passed through as text.** Each
+  writer has its own use for them and none of it is done here. The HTML writer
+  drops the control and wraps what it covered in a span, the WordML writer drops
+  it and splits the run, and the RTF writer keeps it as an escape and appends
+  the U+202C that ends the embedding at the end of the paragraph. A paragraph
+  that is nothing but a control is an empty paragraph in all three. What the
+  port does instead is write the control itself, so every writer differs from
+  the reference on input that carries one. The mark that opens a paragraph is a
+  different character and is already handled by all three writers.
+- **Six HTML cases where a C0 control sits between two spaces differ.** These
+  are the last of a broad differential over the C0 controls, which agrees
+  772 times out of 778. The six are not covered by the harness and the port's
+  behaviour is not characterised for them, so the rule that would fix them is
+  not written here; guessing one would more likely break the 772 that agree.
+
+
 - **Writers write in place rather than through a temporary file**, so a
   destination that is a symlink to a directory is followed and fails where the
   reference tool replaces the link, and an existing read-only regular file
@@ -492,7 +508,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 835 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 939 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
@@ -504,11 +520,12 @@ that is a file, a destination that is a directory, a bundle onto a directory
 and onto a file, spaces in names, and a file whose name looks like an option.
 
 The wordml cases take each fixture through the writer: the paragraph marks and
-separators, both orders of a carriage return and a line feed, tabs at each end
-of a line and on their own, the three characters escaped and the quote that is
-not, the empty document, both metadata times, the font families and the sizes in
-half-points, and the naming of an output with no `-output` at all. They are plain
-text inputs, for the reason given in the divergences above.
+separators, both orders of a carriage return and a line feed, the mark that opens
+a paragraph and gives it a direction, tabs at each end of a line and on their
+own, the three characters escaped and the quote that is not, the empty document,
+both metadata times, the font families and the sizes in half-points, and the
+naming of an output with no `-output` at all. They are plain text inputs, for
+the reason given in the divergences above.
 
 The readers are covered at the end of the suite. Each reads a file that was
 written once by the reference tool into a template, which every case then

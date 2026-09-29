@@ -219,6 +219,18 @@ mkfix() {
     printf '\xe2\x80\xaaA\fB\n' >"$d/embedpage.txt"
     printf '\xe2\x80\xaa\f\xe2\x80\xacA\n' >"$d/embedpage2.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
+    # A NUL and a run of blanks.  A NUL is not shown and it is not a blank,
+    # but it leaves the blanks after it at the head of their line, so they are
+    # counted as leading however much text came before it: nulrearm has one
+    # blank either side of it and a word, nulrearmthree three blanks, nulrearmat
+    # a NUL at the head of a line with blanks on both sides of them, and
+    # nulrearmtail ends the line with blanks after the NUL.  The other controls
+    # are written the same way and are not here, since the blanks after one of
+    # those are counted between two words; see the divergences in NOTES.md.
+    printf 'A\0 B\n' >"$d/nulrearm.txt"
+    printf 'A\0   B\n' >"$d/nulrearmthree.txt"
+    printf '  \0  \n' >"$d/nulrearmat.txt"
+    printf '\0  \n' >"$d/nulrearmtail.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
     # ends a line inside a paragraph and U+2029 ends the paragraph, so these
@@ -818,6 +830,15 @@ for f in embedone embedall embednest embedmerge embedtwo embedopen \
     embedpage embedpage2; do
     check "convert html $f" -convert html "$f.txt"
     check "convert rtf $f" -convert rtf "$f.txt"
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
+done
+
+# A NUL among blanks, which all four writers are held to: it is not shown, and
+# it leaves the blanks after it at the head of their line.
+for f in nulrearm nulrearmthree nulrearmat nulrearmtail; do
+    for fmt in html rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 

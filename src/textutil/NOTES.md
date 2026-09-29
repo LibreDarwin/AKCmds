@@ -508,11 +508,18 @@ a feature that exists on both sides.
   database is consulted.
 - **`-excludedelements`** selects an XHTML serialisation that is not
   implemented; the argument is parsed and validated.
-- **Six HTML cases where a C0 control sits between two spaces differ.** These
-  are the last of a broad differential over the C0 controls, which agrees
-  772 times out of 778. The six are not covered by the harness and the port's
-  behaviour is not characterised for them, so the rule that would fix them is
-  not written here; guessing one would more likely break the 772 that agree.
+- **Fifteen HTML cases where a C0 control other than NUL sits between two
+  spaces differ.** A NUL among blanks is handled: it is not shown, and the
+  blanks after it are at the head of their line, so they are counted as leading
+  however much text came before the NUL. The other C0 controls do not do that,
+  and the blanks after one of those are counted between two words where the
+  reference tool writes them at the head of a line. What decides it is not the
+  run on its own: a run of one space before the control gives a run that leads,
+  a run of two or three does not, and a second control between the runs changes
+  it again, so the rule is not written here rather than guessed at one that
+  would more likely break the cases that already agree. A broad differential
+  over the C0 controls, 12960 cases, agrees on all but 420 of them, and none of
+  those 420 is a NUL. The NUL cases are four of the fixtures in the suite.
 
 
 - **Writers write in place rather than through a temporary file**, so a
@@ -533,7 +540,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 963 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 979 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
@@ -557,6 +564,12 @@ that cover a level around one stretch and round a whole paragraph, a level
 nested inside another with both closed one at a time, a level opened and closed
 with no text between it, a level the text never closes, and a page break with a
 level either side of it and one with a level inside it.
+
+A NUL among blanks is held to all four writers by four fixtures: one blank
+either side of it with a word, three blanks after it, a NUL at the head of a
+line with blanks on both sides, and a line that ends with blanks after one. A
+NUL is not shown, and the blanks after it are at the head of their line, so
+they are counted as leading however much text came before it.
 
 The readers are covered at the end of the suite. Each reads a file that was
 written once by the reference tool into a template, which every case then

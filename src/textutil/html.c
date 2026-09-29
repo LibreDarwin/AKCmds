@@ -491,13 +491,22 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
 /* Whether p[i] is nothing but the levels a run is under, and whether p[j] is
  * followed by nothing but the levels a run is under and blanks.  A run of
  * spaces is at the head of a line when only levels come before it, and at the
- * tail when neither levels nor blanks come after it. */
+ * tail when neither levels nor blanks come after it.
+ *
+ * A NUL counts for nothing here but arms the head of the line again, so a run
+ * of blanks that follows one leads its line however much text came before it:
+ * the reference tool has the run at the head of a line, and so counts it as
+ * leading where the same run after a word would be between two words.  It also
+ * closes the run before it, since ends_line stops at one, so that run is never
+ * the one that fills a blank line.  No other C0 control does either: the run
+ * after one of those is a run between two words however little text there was
+ * in front of it. */
 static int
 opens_line(const char *p, size_t i)
 {
 	while (i >= 3 && tu_bidi_embed((const unsigned char *)p + i - 3, 3) != 0)
 		i -= 3;
-	return i == 0;
+	return i == 0 || (i > 0 && p[i - 1] == '\0');
 }
 
 static int

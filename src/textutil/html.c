@@ -677,6 +677,21 @@ at_para_sep(const char *text, size_t len, size_t k)
 	return at_separator(text, len, k, 0xA9);
 }
 
+/* Where a CR and an LF that pair with each other stop being between them.  A CR
+ * begins a line, and the head of a line may name a direction, so a mark
+ * immediately after it is that mark and is gone.  What is left is the CR/LF
+ * question proper, and it goes over the controls and no further: a second mark,
+ * or a mark that a control came before, is text between the two halves of what
+ * would have been a pair, and so keeps them apart. */
+static size_t
+pair_shown(const char *text, size_t len, size_t k)
+{
+	k += tu_bidi_mark((const unsigned char *)text + k, len - k);
+	while (tu_bidi_embed((const unsigned char *)text + k, len - k) != 0)
+		k += 3;
+	return k;
+}
+
 /* Where the line starting at pos ends, and how many bytes it occupies.  A
  * CR, an LF, a CRLF pair and a U+2029 each end a line and each count once, and
  * the levels and marks in between are of no account to which of them it is. */
@@ -693,7 +708,7 @@ line_at(const char *text, size_t len, size_t pos, size_t *adv)
 	sep = at_para_sep(text, len, i);
 	*adv = i - pos + (sep ? 3 : 1);
 	if (i < len && text[i] == '\r') {
-		size_t j = line_shown(text, len, i + 1);
+		size_t j = pair_shown(text, len, i + 1);
 
 		if (j < len && text[j] == '\n')
 			*adv = j - pos + 1;	/* the pair is one terminator */

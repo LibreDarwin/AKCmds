@@ -275,16 +275,23 @@ wml_runs(FILE *f, const char *p, size_t n, const tu_font_t *face, int points,
  * a mark between the two is not shown to a reader and does not come between
  * them here either: the reference tool takes those out before it looks for the
  * end of a paragraph, so a carriage return and a line feed with only those
- * between them are still one mark. */
+ * between them are still one mark.
+ *
+ * A mark is the exception, and only at the head.  A carriage return begins a
+ * line, and the head of a line may name a direction, so a mark immediately
+ * after it is that mark and is gone -- and only then does the search for the
+ * line feed begin, going over the levels and no further.  A second mark, or a
+ * mark that a level came before, is text between the two halves of what would
+ * have been a pair, and so keeps them apart. */
 static size_t
 wml_mark_width(const char *p, size_t n, size_t i)
 {
 	if (p[i] == '\r') {
 		size_t j = i + 1;
 
-		while (j < n && (tu_bidi_embed((const unsigned char *)p + j,
-		    n - j) != 0 || tu_bidi_open((const unsigned char *)p + j,
-		    n - j) != 0))
+		j += tu_bidi_mark((const unsigned char *)p + j, n - j);
+		while (j < n && tu_bidi_embed((const unsigned char *)p + j,
+		    n - j) != 0)
 			j += 3;
 		return j < n && p[j] == '\n' ? j - i + 1 : 1;
 	}

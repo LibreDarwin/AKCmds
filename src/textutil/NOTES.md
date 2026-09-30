@@ -574,9 +574,17 @@ had.
 This is the same two rules the other writers go by, in the same order and for
 the same reason, which is the main reason to think the reading is right rather
 than a curve fitted to the fifteen shapes: the head of a line is the head of a
-line wherever it is asked about. What is not settled is the markup writers' part
-in it — see the divergences, where the two shapes in which a control comes
-first are still open in HTML and WordML.
+line wherever it is asked about.
+
+The HTML and WordML writers had the wrong order for it, and it is worth saying
+what was wrong rather than only that something was. Both went over the levels
+*and* the marks together, and without limit, when looking for the LF. That is
+right for finding the end of a line — a mark is not shown, and neither is a
+level, so neither of them ends a line — and wrong for pairing, because a mark
+in the middle of a paragraph is text after all, and only the one at the head of
+the line the CR begins is not. Two questions had been answered with one scan
+and they needed two. They are held to all eight shapes now, where the two markup
+writers had been left free, and the four writers answer all eight the same way.
 
 ## Divergences
 
@@ -663,17 +671,10 @@ a feature that exists on both sides.
 - **The five empty and nested HTML block cases listed above** differ by one or
   two characters each, and are left rather than fixed by a rule that would
   break more of the battery than it would repair.
-- **A control between a CR and a mark, or a second mark, before an LF**, in the
-  HTML and WordML writers. Both go the way the RTF writer now does, and both are
-  held in the suite for the RTF and txt writers only, so that the two markup
-  writers are pinned where they agree and left free where they do not. The
-  question is the same one settled above for RTF, so it is expected to fall out
-  of reading the head of a line the way the other writers read it rather than
-  from anything specific to the markup.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1065 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1069 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its

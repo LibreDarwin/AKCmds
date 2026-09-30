@@ -889,20 +889,15 @@ for f in markctlhead markctlmid marktwopara markonlyhead markcr markcrlf \
 done
 
 # What may lie between the two halves of a CR and an LF that pair with each
-# other.  The plain text writer and RTF are held to all eight shapes, since both
-# are settled; the two markup writers are held to the six where what they make
-# of a mark at the head of a line agrees with that, and the other two are where
-# it does not yet and are left to the differential.
+# other.  All four writers are held to all eight shapes, since they are settled
+# and they settled them the same way: the head of a line is taken first, and the
+# controls are gone over after it.
 for f in markinpair markinpairrlm ctlpair pairctl2 pairmarkctl pairmarkalm \
     pairctlmark pairmark2; do
-    for fmt in rtf txt; do
+    for fmt in html rtf txt; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done
-done
-for f in markinpair markinpairrlm ctlpair pairctl2 pairmarkctl pairmarkalm; do
-    for fmt in html wordml; do
-        check "convert $fmt $f" -convert "$fmt" "$f.txt"
-    done
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 
 # A NUL among blanks, which all four writers are held to: it is not shown, and

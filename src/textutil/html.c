@@ -544,6 +544,19 @@ has_shown(const char *p, size_t n)
 	return 0;
 }
 
+/* Whether the three bytes of one of the two Unicode separators, U+2028 and
+ * U+2029, start at k.  They are the only two characters the reference tool
+ * spells out, one as a break within a paragraph and one as the end of it, and
+ * neither is shown.  Which of the two it is does not change the three bytes,
+ * so the caller says. */
+static int
+at_separator(const char *text, size_t len, size_t k, unsigned char last)
+{
+	return len - k >= 3 && (unsigned char)text[k] == 0xE2 &&
+	    (unsigned char)text[k + 1] == 0x80 &&
+	    (unsigned char)text[k + 2] == last;
+}
+
 /* One paragraph's worth of line content.  Sets *used_tab when a tab was
  * written, because that adds a rule to the stylesheet.
  *
@@ -614,6 +627,16 @@ emit_line_body(struct sink *s, const char *p, size_t n, struct html_embed *e,
 			 * as they are and left with nothing in them. */
 			embed_sync(s, e);
 			i++;
+		} else if (at_separator(p, n, i, 0xA8)) {
+			/* A line separator ends a line inside the paragraph
+			 * rather than the paragraph itself, and is written as
+			 * the break that is, which carries a line ending of
+			 * its own after it.  It is room the line takes up,
+			 * so the levels are stated before it, and the break
+			 * falls inside whatever span they want. */
+			embed_sync(s, e);
+			sink_str(s, "<br>\n");
+			i += 3;
 		} else {
 			embed_sync(s, e);
 			emit_escaped(s, &p[i], 1);
@@ -644,18 +667,31 @@ line_shown(const char *text, size_t len, size_t k)
 	return k;
 }
 
+/* Whether a paragraph separator, U+2029, starts at k.  It is a line terminator
+ * in its own right, and unlike a CR it pairs with nothing: a CR before it ends
+ * a line and so does the separator, which is two terminators where a CRLF pair
+ * is one. */
+static int
+at_para_sep(const char *text, size_t len, size_t k)
+{
+	return at_separator(text, len, k, 0xA9);
+}
+
 /* Where the line starting at pos ends, and how many bytes it occupies.  A
- * CR, an LF and a CRLF pair each end a line and each count once, and the levels
- * and marks in between are of no account to which of them it is. */
+ * CR, an LF, a CRLF pair and a U+2029 each end a line and each count once, and
+ * the levels and marks in between are of no account to which of them it is. */
 static size_t
 line_at(const char *text, size_t len, size_t pos, size_t *adv)
 {
 	size_t i = line_shown(text, len, pos), end;
+	int sep;
 
-	while (i < len && text[i] != '\n' && text[i] != '\r')
+	while (i < len && text[i] != '\n' && text[i] != '\r' &&
+	    !at_para_sep(text, len, i))
 		i = line_shown(text, len, i + 1);
 	end = i;
-	*adv = i - pos + 1;
+	sep = at_para_sep(text, len, i);
+	*adv = i - pos + (sep ? 3 : 1);
 	if (i < len && text[i] == '\r') {
 		size_t j = line_shown(text, len, i + 1);
 

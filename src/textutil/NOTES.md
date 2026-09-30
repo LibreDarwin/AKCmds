@@ -452,6 +452,54 @@ Each writer says a run boundary in its own way.
   whatever levels the text around it is under, and only the markup is cut where
   the levels change.
 
+## The two Unicode separators are breaks, and only the WordML writer knew it
+
+U+2028, the line separator, and U+2029, the paragraph separator, are the only
+two characters the reference tool spells out rather than writing as themselves,
+and each of the writers answers a different question about them. The WordML
+writer had them right. The HTML and RTF writers did not, and the reason they
+did not is worth recording, because it is a hole in the suite rather than a
+judgement about the behaviour:
+
+> The fixtures for the two separators — `ps`, `psonly`, `ps2`, `ls`, `lsonly` —
+> were written for the WordML writer, and were only ever checked against it.
+> Nine hundred and seventy-nine checks went by without the other two writers
+> being asked what they make of a U+2029. Holding the same five fixtures to
+> HTML, RTF and txt is what found it, and is now part of the suite.
+
+**A U+2029 is a paragraph mark in RTF, and not a `\u` escape.** It is written
+as `\` followed by a line ending, which is what a paragraph mark is, and it
+ends the paragraph in every other respect as well: the levels the text was
+under are closed, and the next `\u` escape says `\uc0` again. It was
+characterised by comparison rather than by argument — every shape it was tried
+in, with levels and marks and page breaks and `\uc0` state included, gave the
+same bytes whether the character in it was a U+2029 or a plain LF, and twenty
+three shapes were run that way.
+
+**A U+2029 ends a paragraph in HTML, and pairs with nothing.** It is a line
+terminator like CR and LF, but where a CR followed by an LF is one terminator, a
+CR followed by a U+2029 is two: they are terminators in their own right and
+neither swallows the other. The two are told apart by the difference, `a\r` + a
+separator, which the reference tool makes two paragraphs, where the same input
+with an LF is one. The scan that finds the end of a line is byte by byte and
+never saw the three bytes, so the separator is now recognised there and three
+bytes are stepped over rather than one.
+
+**A U+2028 is a break inside the paragraph in HTML,** written as `<br>` followed
+by a line ending of its own, inside whatever span the levels want rather than
+closing it. It is room the line takes up, so a line of nothing but one is not a
+blank line, and it does not end the paragraph: a separator after it does, and
+is then a second paragraph. The WordML and RTF writers were already right, and
+in RTF a U+2028 is a `\uc0` escape where a U+2029 is a mark.
+
+A differential over a break-heavy alphabet — the two separators, the embedding
+controls, the marks, the C0 controls, page breaks, Hebrew, tabs and blanks —
+puts the RTF writer at 999 of 1000, WordML at 1000 and HTML at 980, none of the
+failures a regression, and all of the remaining HTML ones holding a separator
+together with a mark, a level or a control. txt is at 345, and is not a
+question about separators at all: the failures there are the embedding controls
+and the marks, which the plain text writer is not reproducing.
+
 ## Divergences
 
 These are the known points where this port does not do what the reference tool
@@ -540,7 +588,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 979 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 994 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its

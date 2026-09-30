@@ -842,6 +842,18 @@ for f in nulrearm nulrearmthree nulrearmat nulrearmtail; do
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 
+# A paragraph separator is a line terminator in the HTML and RTF writers as
+# well, and neither of them had it held to anything: the fixtures that cover it
+# were written for the WordML writer and only ever checked against that, which
+# is how the two writers got to disagree with the reference tool about what a
+# U+2029 is.  U+2028 is here as well, since it is the same kind of question
+# asked of the same two writers, one shape to one side of the boundary.
+for f in ps psonly ps2 lsonly ls; do
+    for fmt in html rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
+done
+
 # ---------------------------------------------------------------------------
 # Output naming.
 # ---------------------------------------------------------------------------

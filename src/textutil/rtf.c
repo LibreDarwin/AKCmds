@@ -629,8 +629,14 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		 * paragraph mark, which is the LF case.  A CR that pairs with the
 		 * LF after it is that same mark written as a pair, and the levels
 		 * are closed before its CR rather than between the two halves, so
-		 * that no text is written under them. */
-		if (cp == '\n' || cp == '\r') {
+		 * that no text is written under them.
+		 *
+		 * U+2029 is a paragraph mark too, and not a \u escape: every
+		 * shape it was compared in against a plain LF, with the levels
+		 * and the \uc0 that a text escape would leave behind included,
+		 * gave the same bytes either way.  So it is the mark in every
+		 * respect, and is written as one. */
+		if (cp == '\n' || cp == '\r' || cp == 0x2029) {
 			int pair = 0;
 
 			/* The controls between the two halves of the pair are not

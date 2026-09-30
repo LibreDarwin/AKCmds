@@ -498,9 +498,13 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
  * the reference tool has the run at the head of a line, and so counts it as
  * leading where the same run after a word would be between two words.  It also
  * closes the run before it, since ends_line stops at one, so that run is never
- * the one that fills a blank line.  No other C0 control does either: the run
- * after one of those is a run between two words however little text there was
- * in front of it. */
+ * the one that fills a blank line.
+ *
+ * The other twenty-six C0 controls are not settled, and a sweep of them says
+ * they do not all go the way NUL does: taking them to, so that every one of
+ * them armed the head, turns fifteen wrong shapes per control into a hundred
+ * and five.  The few that do arm it are not yet read, and are in the
+ * divergences in NOTES.md. */
 static int
 opens_line(const char *p, size_t i)
 {

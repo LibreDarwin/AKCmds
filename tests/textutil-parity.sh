@@ -218,6 +218,26 @@ mkfix() {
     printf 'A\xe2\x80\xaaB\n' >"$d/embedopen.txt"
     printf '\xe2\x80\xaaA\fB\n' >"$d/embedpage.txt"
     printf '\xe2\x80\xaa\f\xe2\x80\xacA\n' >"$d/embedpage2.txt"
+    # A mark is at the head of a paragraph only when it is the very first thing
+    # in it, and an embedding control in front of it means the paragraph began
+    # with that instead, so the mark after it is text.  markctlhead is a control
+    # and then a mark at what would otherwise be a head, and markctlmid puts a
+    # mark after a control in the middle of a line, where it is text either way.
+    printf '\xe2\x80\xaa\xe2\x80\x8eA\n' >"$d/markctlhead.txt"
+    printf 'A\xe2\x80\xaa\xe2\x80\x8eB\n' >"$d/markctlmid.txt"
+    # The head of the second of two paragraphs is a head again, so the mark
+    # there names a direction too, and a paragraph of a mark alone is a
+    # paragraph of nothing once the mark has named it.
+    printf '\xe2\x80\x8eA\n\xe2\x80\x8eB\n' >"$d/marktwopara.txt"
+    printf '\xe2\x80\x8e\n' >"$d/markonlyhead.txt"
+    # markcr, markcrlf, markps and markls are the four ways a line can end and
+    # a mark follow it.  A CR, an LF, a CRLF pair and a U+2029 each end a
+    # paragraph and so put the next one at a head; a U+2028 is a break inside
+    # the paragraph and does not, so the mark after it is text.
+    printf 'A\r\xe2\x80\x8eB\n' >"$d/markcr.txt"
+    printf 'A\r\n\xe2\x80\x8eB\n' >"$d/markcrlf.txt"
+    printf 'A\xe2\x80\xa9\xe2\x80\x8eB\n' >"$d/markps.txt"
+    printf 'A\xe2\x80\xa8\xe2\x80\x8eB\n' >"$d/markls.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A NUL and a run of blanks.  A NUL is not shown and it is not a blank,
     # but it leaves the blanks after it at the head of their line, so they are
@@ -818,18 +838,36 @@ done
 # leaves no word to write.  The three shapes above settle the HTML writer's
 # side of this; these settle the other two.
 for f in bidimark bidimarkhead bidimarktwice; do
-    check "convert rtf $f" -convert rtf "$f.txt"
+    for fmt in rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 
 # The embedding controls are held to all three writers at once, since it is the
 # one thing they agree on how to write: the level each stretch of text is under,
 # and where the text either side of a control that leaves the stack and comes
-# back is one run and not two.
+# back is one run and not two.  The plain text writer is held to them as well,
+# for the other answer to the same question: a level is a direction given to the
+# text it covers rather than characters in it, so it is not shown at all.
 for f in embedone embedall embednest embedmerge embedtwo embedopen \
     embedpage embedpage2; do
-    check "convert html $f" -convert html "$f.txt"
-    check "convert rtf $f" -convert rtf "$f.txt"
+    for fmt in html rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
+done
+
+# Which paragraph a mark names a direction for, held to all four writers.  The
+# three shapes above settle it for the three that record the direction, and
+# these settle it for the fourth, which shows neither a level nor a mark at the
+# head of a paragraph -- and for the three that record it, the case where a
+# paragraph does not begin with a mark at all.
+for f in markctlhead markctlmid marktwopara markonlyhead markcr markcrlf \
+    markps markls; do
+    for fmt in html rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 

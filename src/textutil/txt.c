@@ -801,18 +801,76 @@ tu_encode_bytes(const char *utf8, size_t len, tu_encoding_t enc,
 	return 0;
 }
 
+/* The text as plain text shows it, which is not the whole of what the reader
+ * built.  Two things are not shown: the five embedding controls, which are a
+ * direction given to the text they cover rather than characters, and a mark at
+ * the head of a paragraph, which is how that paragraph was told which way to
+ * read rather than something in it.  Both are dropped wherever they are found,
+ * except that a paragraph is said to begin with a mark only when the mark is
+ * the very first character of it -- an embedding control in front of the mark
+ * means the paragraph began with that, and the mark after it is text.  A mark
+ * anywhere else in a paragraph is text too, and is kept.
+ *
+ * A CR, an LF, a CRLF pair and a U+2029 each end a paragraph here, and so
+ * each puts the next paragraph's head where it can name a direction again.  A
+ * U+2028 is a break inside a paragraph and does not, and neither do the
+ * controls. */
+static char *
+shown_text(const char *p, size_t n, size_t *outlen)
+{
+	char *buf = xmalloc(n + 1);
+	size_t i = 0, m = 0;
+	int head = 1;
+
+	while (i < n) {
+		if (head && tu_bidi_mark((const unsigned char *)p + i,
+		    n - i) != 0) {
+			i += 3;
+			head = 0;
+			continue;
+		}
+		if (tu_bidi_embed((const unsigned char *)p + i, n - i) != 0) {
+			i += 3;
+			head = 0;
+			continue;
+		}
+		if (p[i] == '\r' || p[i] == '\n') {
+			buf[m++] = p[i++];
+			head = 1;
+			continue;
+		}
+		if (n - i >= 3 && (unsigned char)p[i] == 0xE2 &&
+		    (unsigned char)p[i + 1] == 0x80 &&
+		    (unsigned char)p[i + 2] == 0xA9) {
+			memcpy(buf + m, p + i, 3);
+			m += 3;
+			i += 3;
+			head = 1;
+			continue;
+		}
+		buf[m++] = p[i++];
+		head = 0;
+	}
+	buf[m] = 0;
+	*outlen = m;
+	return buf;
+}
+
 int
 tu_write_txt(const tu_doc_t *d, const char *path, tu_encoding_t enc)
 {
 	FILE *fp;
-	char *buf = NULL;
-	size_t buflen = 0;
+	char *shown, *buf = NULL;
+	size_t shownlen = 0, buflen = 0;
 	int rc = 0;
 
-	if (tu_encode_bytes(d->text, d->len, enc, &buf, &buflen) != 0) {
+	shown = shown_text(d->text, d->len, &shownlen);
+	if (tu_encode_bytes(shown, shownlen, enc, &buf, &buflen) != 0) {
+		free(shown);
 		tu_write_failed(path);
 		return -1;
 	}
+	free(shown);
 	fp = fopen(path, "wb");
 	if (fp == NULL) {
 		free(buf);

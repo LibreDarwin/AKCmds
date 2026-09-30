@@ -500,6 +500,49 @@ together with a mark, a level or a control. txt is at 345, and is not a
 question about separators at all: the failures there are the embedding controls
 and the marks, which the plain text writer is not reproducing.
 
+## The plain text writer shows neither a level nor a mark, and knew neither
+
+txt is the fourth answer to every question the three other writers give a
+different answer to, and it is the easiest to get right, because it is the one
+that writes no markup at all. It was also the one the suite had never asked, in
+the same way and for the same reason as the two separators: the mark fixtures
+were held to RTF and WordML, which record a direction, and the level fixtures to
+the three that record one, and txt was in neither list. It is in both now, and
+in the eight new shapes below, which are held to all four writers at once.
+
+Two things are not shown. The five embedding controls are a direction given to
+the text a paragraph covers rather than characters in it, so they go wherever
+they are found — mid-line, at a head, a run of nothing but controls — and a
+level with no text between it leaves nothing behind at all. And a mark at the
+head of a paragraph is how that paragraph was told which way to read rather
+than something in it, so it goes too. That is the same rule the other three
+writers follow, through the same `tu_bidi_mark()`, and it was already written
+down; what was missing was that the fourth writer never consulted it.
+
+**A paragraph begins with a mark only when the mark is the very first thing in
+it.** This is the part that had to be settled, and it went the opposite way to
+the obvious one. An embedding control in front of the mark does not get out of
+the way of it: the paragraph began with *that*, and the mark after it is text
+and is kept. So `LRE LRM A` writes `LRM A` and `A CR LRE LRM B` writes
+`A CR LRM B`, while `A CR LRM B` and `LRM A` write `A CR B` and `A`. One mark
+is dropped, and a second is kept: `LRM LRM` writes one `LRM`, and
+`A CR LRM LRE LRM B` writes `A CR LRM B`. Whitespace counts as content, so a
+mark after a space, a tab, an Arabic letter mark or a U+2028 is text, and only
+a mark with nothing at all in front of it names a direction.
+
+**Four things put the next paragraph back at a head, and three of them are the
+ones you would guess.** A CR, an LF, a CRLF pair and a U+2029 each end a
+paragraph here and each put the mark that follows at a head of its own, so a
+mark in the middle of a line is dropped and the same mark in the middle of the
+next one is not. A U+2028 is the exception and the interesting one: it is a
+break *inside* a paragraph, and the paragraph is not over, so the mark after it
+is text. Nor do the controls, a page break, or any of the C0 controls re-arm
+it — a NUL, a VT and a bell are all shown, and a shown character is the end of
+whatever claim to a head was being made.
+
+The differential that had txt at 345 of 1000 has it at 1000, RTF at 1000 and
+WordML at 1000, and HTML at 991, with no regression in any of them.
+
 ## Divergences
 
 These are the known points where this port does not do what the reference tool
@@ -588,7 +631,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 994 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1037 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its

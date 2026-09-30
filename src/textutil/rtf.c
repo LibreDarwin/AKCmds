@@ -639,12 +639,17 @@ tu_write_rtf(const tu_doc_t *d, const char *path, const tu_style_t *st,
 		if (cp == '\n' || cp == '\r' || cp == 0x2029) {
 			int pair = 0;
 
-			/* The controls between the two halves of the pair are not
-			 * written at all, since the mark closes the levels and leaves
-			 * no text under them for them to be recorded on. */
+			/* The CR begins a line, and the head of a line may name
+			 * a direction, so a mark right after it is that mark and
+			 * is not written.  Only then does the search for the LF
+			 * begin, and it goes over the controls and no further:
+			 * a second mark, or a mark that a control came before,
+			 * is text between the two halves of what would have been
+			 * a pair, and so keeps them apart. */
 			if (cp == '\r') {
 				size_t j = i;
 
+				j += tu_bidi_mark(p + j, len - j);
 				while (tu_bidi_embed(p + j, len - j) != 0)
 					j += 3;
 				if (j < len && p[j] == '\n') {

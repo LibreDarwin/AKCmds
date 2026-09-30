@@ -543,6 +543,41 @@ whatever claim to a head was being made.
 The differential that had txt at 345 of 1000 has it at 1000, RTF at 1000 and
 WordML at 1000, and HTML at 991, with no regression in any of them.
 
+## A CR and an LF pair with each other, and one mark may lie between them
+
+A CR on its own is a paragraph mark, and a CR that pairs with the LF after it is
+that same mark written as a pair, with the CR kept as text. The pairing was
+already being looked for and already went over the embedding controls, since a
+level between the two halves is recorded nowhere anyway. What it did not go
+over was a mark, so `CR LRM LF` came out as two terminators and a paragraph of
+its own, where the reference tool makes one — a single failing shape in the RTF
+differential, and one that a 1470-shape sweep of the question now settles.
+
+**The mark is taken at the head of the line the CR begins, and only then does
+the search for the LF start.** So the order is the rule, and the rule is two
+rules rather than one. A CR begins a line, and the head of a line may name a
+direction, so a mark immediately after it is that mark and is dropped. What is
+left is the CR/LF question proper, and the controls are gone over and nothing
+else is. That is why the mark has to be *first*: a control in front of it means
+the head of the line was that control rather than a mark, and the mark is text
+between the two halves of what would have been a pair. It is also why a second
+mark breaks it — the head was the first one, and the second is text.
+
+Every combination of two and three characters over the seven characters
+involved, in four positions each, was tried against the reference tool, and
+these two are the whole of the answer: a mark first and then only controls
+pairs, and anything else does not. A mark that is text rather than a direction,
+the Arabic letter mark, breaks the pair anywhere it appears, and a CR whose LF
+has anything else after it is a lone CR, which is the case the code already
+had.
+
+This is the same two rules the other writers go by, in the same order and for
+the same reason, which is the main reason to think the reading is right rather
+than a curve fitted to the fifteen shapes: the head of a line is the head of a
+line wherever it is asked about. What is not settled is the markup writers' part
+in it — see the divergences, where the two shapes in which a control comes
+first are still open in HTML and WordML.
+
 ## Divergences
 
 These are the known points where this port does not do what the reference tool
@@ -628,10 +663,17 @@ a feature that exists on both sides.
 - **The five empty and nested HTML block cases listed above** differ by one or
   two characters each, and are left rather than fixed by a rule that would
   break more of the battery than it would repair.
+- **A control between a CR and a mark, or a second mark, before an LF**, in the
+  HTML and WordML writers. Both go the way the RTF writer now does, and both are
+  held in the suite for the RTF and txt writers only, so that the two markup
+  writers are pinned where they agree and left free where they do not. The
+  question is the same one settled above for RTF, so it is expected to fall out
+  of reading the head of a line the way the other writers read it rather than
+  from anything specific to the markup.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1037 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1065 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its

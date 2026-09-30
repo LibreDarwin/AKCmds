@@ -238,6 +238,23 @@ mkfix() {
     printf 'A\r\n\xe2\x80\x8eB\n' >"$d/markcrlf.txt"
     printf 'A\xe2\x80\xa9\xe2\x80\x8eB\n' >"$d/markps.txt"
     printf 'A\xe2\x80\xa8\xe2\x80\x8eB\n' >"$d/markls.txt"
+    # A CR pairs with the LF after it into one terminator, and what may lie
+    # between the two halves of that pair is the question.  markinpair and
+    # markinpairrlm are one mark, ctlpair and pairctl2 are controls, and
+    # pairmarkctl is a mark and then a control, so a mark is taken at the head
+    # of the line the CR begins and the controls are gone over after it.
+    # pairmarkalm adds a mark that is text and so is in the way.  pairctlmark
+    # puts a control before the mark, which stops the mark being at the head,
+    # and pairmark2 puts a second mark there, which is the other thing that
+    # does.  Neither of those two is a pair.
+    printf 'A\r\xe2\x80\x8e\nB\n' >"$d/markinpair.txt"
+    printf 'A\r\xe2\x80\x8f\nB\n' >"$d/markinpairrlm.txt"
+    printf 'A\r\xe2\x80\xaa\nB\n' >"$d/ctlpair.txt"
+    printf 'A\r\xe2\x80\xaa\xe2\x80\xac\nB\n' >"$d/pairctl2.txt"
+    printf 'A\r\xe2\x80\x8e\xe2\x80\xaa\nB\n' >"$d/pairmarkctl.txt"
+    printf 'A\r\xe2\x80\x8e\xe2\x98\x9c\nB\n' >"$d/pairmarkalm.txt"
+    printf 'A\r\xe2\x80\xaa\xe2\x80\x8e\nB\n' >"$d/pairctlmark.txt"
+    printf 'A\r\xe2\x80\x8e\xe2\x80\x8e\nB\n' >"$d/pairmark2.txt"
     printf 'one\r\ntwo\r\n' >"$d/crlf.txt"
     # A NUL and a run of blanks.  A NUL is not shown and it is not a blank,
     # but it leaves the blanks after it at the head of their line, so they are
@@ -869,6 +886,23 @@ for f in markctlhead markctlmid marktwopara markonlyhead markcr markcrlf \
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done
     check "convert wordml $f" -convert wordml -output out "$f.txt"
+done
+
+# What may lie between the two halves of a CR and an LF that pair with each
+# other.  The plain text writer and RTF are held to all eight shapes, since both
+# are settled; the two markup writers are held to the six where what they make
+# of a mark at the head of a line agrees with that, and the other two are where
+# it does not yet and are left to the differential.
+for f in markinpair markinpairrlm ctlpair pairctl2 pairmarkctl pairmarkalm \
+    pairctlmark pairmark2; do
+    for fmt in rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
+done
+for f in markinpair markinpairrlm ctlpair pairctl2 pairmarkctl pairmarkalm; do
+    for fmt in html wordml; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
 done
 
 # A NUL among blanks, which all four writers are held to: it is not shown, and

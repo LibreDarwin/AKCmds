@@ -256,6 +256,36 @@ Other details:
   then prints a per-image geometry line. `-catnosizecheck` and
   `-cathidpicheck` select the other policies.
 
+## An unnamed field draws a warning, but only where a directory is read
+
+    TIFFReadDirectory: Warning, Unknown field with tag 347 (0x15b) encountered.
+
+Walking a directory that holds one candidate tag at a time, over the whole tag
+space, settles what "unknown" means here: **152 tags** are named, and every
+other one of the 65536 draws the warning above. The set is in
+`known_tags[]` in tiff_text.c; it was measured, not guessed, and it is not the
+same set `-dump` names tags from -- 347 is `JPEGTables` in `-dump` output and
+an unknown field in `-info`, because the two go through different
+vocabularies.
+
+- The warning goes to stderr, one line per unknown tag, and only from `-info`
+  and `-verboseinfo`. `-dump` walks the raw IFD itself and stays quiet, as do
+  the converting modes.
+- It appears once per directory, in the order the entries sit in the file, not
+  in the order of the tag numbers -- a directory listing tags descending warns
+  in descending order. (TIFF wants IFD entries ascending; the reference tool
+  reads them as it finds them.)
+- It comes before the directory's other complaints, so it precedes the
+  ExtraSamples line when both fire.
+- **Predictor (317) is the one conditional name**: named under compression 5,
+  8, 32909 and 32946 (LZW, both Deflate spellings, PixarFilm), and unknown
+  under everything else, including a directory with no Compression tag at all.
+  Everything else in the 152 is named under every compression probed: none,
+  LZW, Deflate, PackBits, G4, YCbCr, palette, CMYK, Lab, LogLuv and RGB16.
+
+The reference tool hangs for minutes when a directory holds tag 333 (InkNames)
+with a one-element count, so no fixture uses it.
+
 ## The argument grammar is positional, not a flag soup
 
 Probed exhaustively; this is the whole of the parser's behaviour.
@@ -315,6 +345,18 @@ Known gaps, as reported by that harness and not yet fixed:
 
 Still open, and therefore *not* pinned down by anything in this file:
 
+- Two `-info` lines, both found while building the unknown-field fixtures and
+  both left unfixed rather than folded into that change. Neither is exercised
+  by the harness today, because every fixture that hit them was pulled back to
+  tags that stay quiet.
+  - Tag 254 (NewSubfileType) prints no line at all here, where the reference
+    tool prints one of `  Subfile Type: (0 = 0x0)`,
+    `  Subfile Type: reduced-resolution image (1 = 0x1)`,
+    `  Subfile Type: multi-page document (2 = 0x2)`.
+  - Tag 296 (ResolutionUnit) is printed whenever the tag is present, and
+    `none` is spelled `unknown`. Measured over values 0-4 and 9: the reference
+    tool prints no line for 0, 4 or 9, and prints `none`, `pixels/inch` and
+    `pixels/cm` for 1, 2 and 3 -- note `pixels/cm`, not `centimeters/inch`.
 - 16-bit LogLuv is converted rather than copied, and its conversion is still
   unknown. 8-bit YCbCr Photometric 6 is converted too, and is now reproduced;
   see the YCbCr note above for the model and for the residuals it leaves.

@@ -28,6 +28,52 @@ tu_type_size(int type)
 	}
 }
 
+/* The tags whose presence the reference tool does not draw as an unknown
+ * field, observed by walking a directory that holds one candidate tag at a
+ * time.  A tag outside this set draws a warning while the directory is read,
+ * which is a property of reading rather than of the file: -dump walks the
+ * raw IFD itself and says nothing, and neither do the converting modes.
+ * The set is not the same as the one -dump names tags from -- 347 is named
+ * JPEGTables there and reported unknown here. */
+static const uint16_t known_tags[] = {
+	254, 255, 256, 257, 258, 259, 262, 263, 264, 265, 266, 269, 270, 271,
+	272, 273, 274, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287,
+	288, 289, 290, 291, 296, 297, 300, 301, 305, 306, 315, 316, 318, 319,
+	320, 321, 322, 323, 324, 325, 330, 332, 333, 334, 336, 337, 338, 339,
+	340, 341, 343, 344, 345, 346, 400, 401, 402, 403, 404, 405, 433, 434,
+	435, 529, 530, 531, 532, 559, 700, 32995, 32996, 32997, 32998, 33300,
+	33301, 33302, 33303, 33304, 33305, 33306, 33421, 33422, 33432, 33723,
+	34377, 34665, 34675, 34732, 34853, 34908, 34909, 34910, 34911, 37439,
+	37724, 40965, 50706, 50707, 50708, 50709, 50710, 50711, 50712, 50713,
+	50714, 50715, 50716, 50717, 50718, 50719, 50720, 50721, 50722, 50723,
+	50724, 50725, 50726, 50727, 50728, 50729, 50730, 50731, 50732, 50733,
+	50734, 50735, 50736, 50737, 50738, 50739, 50740, 50741, 50778, 50779,
+	50780, 50781, 50827, 50828, 50829, 50830, 50831, 50832, 50833, 50834,
+};
+
+static int
+tag_is_known(uint16_t tag, uint32_t compression)
+{
+	size_t lo = 0, hi = sizeof(known_tags) / sizeof(known_tags[0]);
+
+	while (lo < hi) {
+		size_t mid = lo + (hi - lo) / 2;
+
+		if (known_tags[mid] == tag)
+			return 1;
+		if (known_tags[mid] < tag)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	/* One tag is named only for the codecs that predict, which covers LZW,
+	 * both Deflate spellings and PixarFilm.  Under any other compression
+	 * it is left unnamed and draws the warning with the rest. */
+	return tag == TAG_PREDICTOR &&
+	    (compression == 5 || compression == 8 ||
+	     compression == 32909 || compression == 32946);
+}
+
 /* The tag vocabulary, spelled as the reference tool spells it. */
 static const char *
 dump_tag_name(uint16_t tag)
@@ -60,6 +106,9 @@ dump_tag_name(uint16_t tag)
 	case 305:                 return "Software";
 	case 320:                 return "Colormap";
 	case 33628:               return "CFAPattern";
+	/* JPEGTables is named here and yet still drawn as an unknown field by
+	 * -info: the two go through different vocabularies. */
+	case 347:                 return "JPEGTables";
 	default:                  return NULL;
 	}
 }
@@ -213,6 +262,22 @@ tu_cmd_info(const char *path, int verbose)
 		uint32_t shown_rps = 0;
 		int resplit = 0;
 
+		/* Unnamed fields are named on stderr as the directory is read,
+		 * in the order they sit in it rather than in tag order, and
+		 * before any of the other per-directory complaints. */
+		{
+			uint32_t comp = 0;
+
+			tu_get_uint(&t, d, TAG_COMPRESSION, &comp);
+			for (uint32_t i = 0; i < t.ndirs[d]; i++) {
+				uint16_t tag = t.ents[d][i].tag;
+
+				if (!tag_is_known(tag, comp))
+					tu_warn("TIFFReadDirectory: Warning,"
+					    " Unknown field with tag %u (0x%x)"
+					    " encountered.\n", tag, tag);
+			}
+		}
 		{
 			uint32_t cspp = 0, ctype = 0;
 			int cxtype = 0;

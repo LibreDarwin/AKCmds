@@ -366,6 +366,73 @@ s_pred() {
     :
 }
 
+# Fixture builder for the unknown-field warning: an uncompressed 8-bit gray
+# directory carrying tags the reference tool has no name for.  One
+# semicolon-separated group per directory, and the tags inside a group go in
+# exactly as written, so a case can pin that the warning follows the order the
+# entries sit in rather than the order of the tag numbers.
+#
+#   mkextra <path> <endian> <tags>[;<tags>...]
+mkextra() {
+    python3 - "$@" <<'PYEOF'
+import struct, sys
+
+path, endian = sys.argv[1], sys.argv[2]
+e = '<' if endian == 'little' else '>'
+magic = b'II' if endian == 'little' else b'MM'
+
+body = bytearray(magic + struct.pack(e + 'HI', 42, 0))
+ifds = []
+for group in sys.argv[3].split(';'):
+    if not group:
+        continue
+    w = h = 4
+    data = bytearray(w * h)
+    so = len(body)
+    body += data
+    sc = len(data)
+    entries = [(256, 4, 1, [w]), (257, 4, 1, [h]), (258, 3, 1, [8]),
+               (259, 3, 1, [1]), (262, 3, 1, [1]), (273, 4, 1, [so]),
+               (277, 3, 1, [1]), (278, 3, 1, [h]), (279, 4, 1, [sc]),
+               (284, 3, 1, [1])]
+    for tag in group.split(','):
+        entries.append((int(tag), 3, 1, [1]))
+    entries.sort(key=lambda x: x[0])
+    fmt = {3: 'H', 4: 'I'}
+    ifd = len(body)
+    body += struct.pack(e + 'H', len(entries))
+    for tag, typ, cnt, vals in entries:
+        raw = b''.join(struct.pack(e + fmt[typ], v) for v in vals)
+        body += struct.pack(e + 'HHI', tag, typ, cnt) + raw
+        body += b'\0' * (4 - len(raw))
+    body += struct.pack(e + 'I', 0)
+    ifds.append((ifd, len(entries)))
+
+struct.pack_into(e + 'I', body, 4, ifds[0][0])
+for i in range(len(ifds) - 1):
+    off, n = ifds[i]
+    struct.pack_into(e + 'I', body, off + 2 + 12 * n, ifds[i + 1][0])
+
+with open(path, 'wb') as f:
+    f.write(bytes(body))
+PYEOF
+}
+
+s_unk()    { mkextra "$1/i.tiff" little 347; }
+s_unk_hi() { mkextra "$1/i.tiff" little 65000; }
+s_unk_two(){ mkextra "$1/i.tiff" little 347,65000,65001; }
+# Descending on purpose: the warning has to follow the directory, not the
+# tag numbers.
+s_unk_rev(){ mkextra "$1/i.tiff" little 65001,65000,347; }
+s_unk_dir(){ mkextra "$1/i.tiff" little '347;65000'; }
+s_unk_be() { mkextra "$1/i.tiff" big 347; }
+# Tag 333 is a name the reference tool has, but asking for one InkName hangs
+# it for minutes, so it is left out of every fixture here.  254 and 305 are
+# left out too: the first adds a Subfile Type line and the second a complaint
+# about a missing null terminator, neither of which this case is about.  What
+# is left are names the tool has and never mentions.
+s_unk_known() { mkextra "$1/i.tiff" little 300,434,700; }
+
 # Single-page shapes.  w,h,bps,spp,photo.
 G8="16,16,8,1,1"          # 8-bit gray
 G8W="64,48,8,1,1"         # 8-bit gray, both dimensions even
@@ -532,6 +599,24 @@ for op in -info -verboseinfo; do
     check "g4src $op" little "$B1G" s_g4 -- "$op" c.tiff
 done
 check "g4src -dump"        little "$B1G"  s_g4 -- -dump c.tiff
+# An unnamed field draws a warning on stderr, but only where the directory is
+# read through the TIFF library: -info and -verboseinfo report it, -dump walks
+# the raw IFD itself and says nothing, and neither does a conversion.
+for op in -info -verboseinfo; do
+    check "unknown tag $op"        little "$G8W" s_unk     -- "$op" i.tiff
+    check "unknown tag $op high"   little "$G8W" s_unk_hi  -- "$op" i.tiff
+    check "unknown tag $op BE"     big    "$G8W" s_unk_be  -- "$op" i.tiff
+    check "unknown tags $op"       little "$G8W" s_unk_two -- "$op" i.tiff
+    check "unknown tags $op rev"   little "$G8W" s_unk_rev -- "$op" i.tiff
+    check "unknown tag $op dirs"   little "$G8W" s_unk_dir -- "$op" i.tiff
+    check "named tags $op quiet"   little "$G8W" s_unk_known -- "$op" i.tiff
+done
+check "unknown tag -dump"      little "$G8W" s_unk     -- -dump i.tiff
+check "unknown tag convert"    little "$G8W" s_unk     -- -none i.tiff -out o.tiff
+# Predictor is named only for the codecs that predict.  Under an uncompressed
+# directory it is as unnamed as anything else; under LZW it is not.
+check "predictor -info uncompressed" little "$G8W" s_none -- -info i.tiff
+check "predictor -info lzw"    little "$G8W" s_lzw      -- -info c.tiff
 check "g4src -extract 0"   little "$B1G"  s_g4 -- -extract 0 c.tiff -out o.tiff
 check "g4src -extract end" little "$MULTI" s_g4 -- -extract 3 c.tiff -out o.tiff
 # The same narrow depth override applies to a source that is not facsimile to

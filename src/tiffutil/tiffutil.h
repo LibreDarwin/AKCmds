@@ -148,6 +148,7 @@ int tu_cmd_info(const char *path, int verbose);
 int tu_cmd_dump(const char *path);
 
 /* Tags used by the tool. */
+#define TAG_NEWSUBFILETYPE   254
 #define TAG_IMAGEWIDTH      256
 #define TAG_IMAGELENGTH     257
 #define TAG_BITSPERSAMPLE   258

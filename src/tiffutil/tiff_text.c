@@ -278,6 +278,20 @@ tu_cmd_info(const char *path, int verbose)
 					    " encountered.\n", tag, tag);
 			}
 		}
+		/* A field can also be turned down when it is set, and that is a
+		 * later and separate complaint: still on stderr, but after
+		 * every unknown-field warning the directory drew, and one per
+		 * offending field.  ResolutionUnit is the only one of these
+		 * checked here; the rest of the family is written down in
+		 * NOTES.md rather than guessed at. */
+		{
+			uint32_t unit = 0;
+
+			if (tu_get_uint(&t, d, TAG_RESOLUTIONUNIT, &unit) == 0
+			    && unit - 1u > 2)
+				tu_warn("_TIFFVSetField: %s: Bad value %u for"
+				    " \"ResolutionUnit\" tag.\n", path, unit);
+		}
 		{
 			uint32_t cspp = 0, ctype = 0;
 			int cxtype = 0;
@@ -300,6 +314,40 @@ tu_cmd_info(const char *path, int verbose)
 				    " channels as ExtraSamples..\n");
 		}
 		printf("Directory at 0x%x\n", t.ifdoff[d]);
+		/* NewSubfileType is a set of three flags, not a number: each
+		 * one that is set is named, in bit order, and they are joined
+		 * with a slash.  A value with none of the three set -- zero, or
+		 * anything above bit 2 -- leaves the name empty, and the line
+		 * still goes out.  The old SubfileType (255) says nothing. */
+		if (tu_get_uint(&t, d, TAG_NEWSUBFILETYPE, &v) == 0) {
+			static const char *const kind[] = {
+				"reduced-resolution image",
+				"multi-page document",
+				"transparency mask"
+			};
+			char names[96];
+			size_t len = 0;
+			int i;
+
+			for (i = 0; i < 3; i++) {
+				if (!(v & (1u << i)))
+					continue;
+				if (len != 0)
+					len += snprintf(names + len,
+					    sizeof(names) - len, "/");
+				len += snprintf(names + len, sizeof(names) - len,
+				    "%s", kind[i]);
+			}
+			/* The names carry their own trailing space, so a value
+			 * with none of the three set leaves the line as
+			 * "Subfile Type: (0 = 0x0)". */
+			if (len != 0)
+				len += snprintf(names + len,
+				    sizeof(names) - len, " ");
+			else
+				names[0] = '\0';
+			printf("  Subfile Type: %s(%u = 0x%x)\n", names, v, v);
+		}
 		tu_get_uint(&t, d, TAG_IMAGEWIDTH, &w);
 		tu_get_uint(&t, d, TAG_IMAGELENGTH, &h);
 		printf("  Image Width: %u Image Length: %u\n", w, h);
@@ -308,11 +356,13 @@ tu_cmd_info(const char *path, int verbose)
 			tu_get_uint(&t, d, TAG_YRESOLUTION, &y);
 			printf("  Resolution: %u, %u\n", v, y);
 		}
-		if (tu_has_tag(&t, d, TAG_RESOLUTIONUNIT)) {
-			tu_get_uint(&t, d, TAG_RESOLUTIONUNIT, &v);
-			printf("  Resolution Unit: %s\n", v == 2 ? "pixels/inch"
-			    : v == 3 ? "centimeters/inch" : "unknown");
-		}
+		/* Only the three units the reference tool has a name for get a
+		 * line; it is silent about the rest, rather than printing the
+		 * number or calling it unknown. */
+		if (tu_get_uint(&t, d, TAG_RESOLUTIONUNIT, &v) == 0 &&
+		    v - 1u <= 2)
+			printf("  Resolution Unit: %s\n", v == 1 ? "none"
+			    : v == 2 ? "pixels/inch" : "pixels/cm");
 		if (tu_get_uint(&t, d, TAG_BITSPERSAMPLE, &bps) == 0)
 			printf("  Bits/Sample: %u\n", bps);
 		if (tu_has_tag(&t, d, TAG_SAMPLEFORMAT)) {

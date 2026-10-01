@@ -286,6 +286,44 @@ vocabularies.
 The reference tool hangs for minutes when a directory holds tag 333 (InkNames)
 with a one-element count, so no fixture uses it.
 
+## NewSubfileType is a set of flags, and a value can be turned down
+
+Two `-info` lines that are easy to get wrong, both measured by sweeping values
+rather than by reading the spec.
+
+**NewSubfileType (254)** is three flags, not a number. Each one that is set is
+named, in bit order, and the names are joined with a slash:
+
+    bit 0  reduced-resolution image
+    bit 1  multi-page document
+    bit 2  transparency mask
+
+A value with none of the three set -- zero, or anything above bit 2 -- leaves
+the name empty and the line still goes out, right under `Directory at` and
+before `Image Width`:
+
+    Subfile Type: (0 = 0x0)
+    Subfile Type: reduced-resolution image (1 = 0x1)
+    Subfile Type: reduced-resolution image/multi-page document/transparency mask (7 = 0x7)
+
+The names carry their own trailing space, which is what puts one between the
+name and the value: the empty case has only the space that follows the colon.
+The deprecated **SubfileType (255)** prints nothing at all, and carrying both
+tags prints one line, from 254.
+
+**A value can also be refused**, which is a separate and later complaint than
+an unknown field. ResolutionUnit (296) accepts 1, 2 and 3 and names them
+`none`, `pixels/inch` and `pixels/cm` -- note `pixels/cm`, not
+`centimeters/inch`. Anything else costs it the line entirely, prints no
+substitute, and draws this on stderr instead:
+
+    _TIFFVSetField: F: Bad value 0 for "ResolutionUnit" tag.
+
+That comes *after* every unknown-field warning the same directory drew, not
+among them, and `-dump` prints neither the line nor the complaint. Six other
+tags refuse values the same way and are not handled; their measured ranges are
+in the open list below.
+
 ## The argument grammar is positional, not a flag soup
 
 Probed exhaustively; this is the whole of the parser's behaviour.
@@ -345,18 +383,30 @@ Known gaps, as reported by that harness and not yet fixed:
 
 Still open, and therefore *not* pinned down by anything in this file:
 
-- Two `-info` lines, both found while building the unknown-field fixtures and
-  both left unfixed rather than folded into that change. Neither is exercised
-  by the harness today, because every fixture that hit them was pulled back to
-  tags that stay quiet.
-  - Tag 254 (NewSubfileType) prints no line at all here, where the reference
-    tool prints one of `  Subfile Type: (0 = 0x0)`,
-    `  Subfile Type: reduced-resolution image (1 = 0x1)`,
-    `  Subfile Type: multi-page document (2 = 0x2)`.
-  - Tag 296 (ResolutionUnit) is printed whenever the tag is present, and
-    `none` is spelled `unknown`. Measured over values 0-4 and 9: the reference
-    tool prints no line for 0, 4 or 9, and prints `none`, `pixels/inch` and
-    `pixels/cm` for 1, 2 and 3 -- note `pixels/cm`, not `centimeters/inch`.
+- Six of the seven tags whose value can be turned down still are not handled
+  here; only ResolutionUnit is. Measured accepted ranges, found by sweeping
+  values 0-16 through `-info`:
+
+      266 FillOrder      1-2     274 Orientation    1-8
+      296 ResolutionUnit 1-3     338 ExtraSamples  0-2
+      339 SampleFormat   1-6     32996 DataType    0-3
+      32998 TileDepth    1-16+   (upper bound not searched)
+
+  FillOrder and Orientation need only what ResolutionUnit now has: drop the
+  line for a value outside the range and warn. Each also has wording to fix --
+  Orientation says `left`/`right` where the reference tool says `lhs`/`rhs`, and
+  both print a line where the reference tool prints none.
+
+  The other four refuse harder: a bad ExtraSamples, SampleFormat, DataType or
+  TileDepth makes the file *fail to open*, printing `Error: Can't open F.
+  Either it isn't readable, it isn't a TIFF file, or there are unrecognized
+  tags; try tiffutil -dump for more info.` after the warning and reporting no
+  directory at all. Two more measured details they leave behind: SampleFormat 3
+  is `IEEE floating point` here against `floating point`, 4 is `void` against
+  `undefined`, and an unnamed accepted value like 5 is printed as `5 (0x5)`
+  rather than as `unknown`; and DataType (32996) makes the reference tool print
+  a whole Sample Format line from a tag that is otherwise ignored here. None of
+  this is pinned by the harness today.
 - 16-bit LogLuv is converted rather than copied, and its conversion is still
   unknown. 8-bit YCbCr Photometric 6 is converted too, and is now reproduced;
   see the YCbCr note above for the model and for the residuals it leaves.

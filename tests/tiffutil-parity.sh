@@ -367,10 +367,10 @@ s_pred() {
 }
 
 # Fixture builder for the unknown-field warning: an uncompressed 8-bit gray
-# directory carrying tags the reference tool has no name for.  One
-# semicolon-separated group per directory, and the tags inside a group go in
-# exactly as written, so a case can pin that the warning follows the order the
-# entries sit in rather than the order of the tag numbers.
+# directory carrying extra tags.  One semicolon-separated group per directory,
+# and the tags inside a group go in exactly as written, so a case can pin that
+# a warning follows the order the entries sit in rather than the order of the
+# tag numbers.  A tag is written as "n" or as "n=value".
 #
 #   mkextra <path> <endian> <tags>[;<tags>...]
 mkextra() {
@@ -395,8 +395,9 @@ for group in sys.argv[3].split(';'):
                (259, 3, 1, [1]), (262, 3, 1, [1]), (273, 4, 1, [so]),
                (277, 3, 1, [1]), (278, 3, 1, [h]), (279, 4, 1, [sc]),
                (284, 3, 1, [1])]
-    for tag in group.split(','):
-        entries.append((int(tag), 3, 1, [1]))
+    for spec in group.split(','):
+        tag, _, val = spec.partition('=')
+        entries.append((int(tag), 3, 1, [int(val) if val else 1]))
     entries.sort(key=lambda x: x[0])
     fmt = {3: 'H', 4: 'I'}
     ifd = len(body)
@@ -432,6 +433,31 @@ s_unk_be() { mkextra "$1/i.tiff" big 347; }
 # about a missing null terminator, neither of which this case is about.  What
 # is left are names the tool has and never mentions.
 s_unk_known() { mkextra "$1/i.tiff" little 300,434,700; }
+
+# NewSubfileType is three flags, so the name is built from the bits: 0 and
+# anything past bit 2 leave it empty, and the three of them together are joined
+# with a slash.  The old SubfileType (255) says nothing at all.
+s_sub_none() { mkextra "$1/i.tiff" little 254=0; }
+s_sub_one()  { mkextra "$1/i.tiff" little 254=1; }
+s_sub_two()  { mkextra "$1/i.tiff" little 254=2; }
+s_sub_three(){ mkextra "$1/i.tiff" little 254=3; }
+s_sub_four() { mkextra "$1/i.tiff" little 254=4; }
+s_sub_all()  { mkextra "$1/i.tiff" little 254=7; }
+s_sub_past() { mkextra "$1/i.tiff" little 254=8; }
+s_sub_high() { mkextra "$1/i.tiff" little 254=1000; }
+s_sub_old()  { mkextra "$1/i.tiff" little 255=1; }
+# ResolutionUnit names three units and turns down the rest, which costs it the
+# line and earns a complaint on stderr instead.
+s_ru_one()   { mkextra "$1/i.tiff" little 296=1; }
+s_ru_two()   { mkextra "$1/i.tiff" little 296=2; }
+s_ru_three() { mkextra "$1/i.tiff" little 296=3; }
+s_ru_zero()  { mkextra "$1/i.tiff" little 296=0; }
+s_ru_nine()  { mkextra "$1/i.tiff" little 296=9; }
+s_ru_hi()    { mkextra "$1/i.tiff" little 296=65535; }
+s_ru_big()   { mkextra "$1/i.tiff" big 296=0; }
+# The complaint about a turned-down field is made after every unknown-field
+# warning, not among them.
+s_ru_unk()   { mkextra "$1/i.tiff" little 296=0,347=1; }
 
 # Single-page shapes.  w,h,bps,spp,photo.
 G8="16,16,8,1,1"          # 8-bit gray
@@ -617,6 +643,21 @@ check "unknown tag convert"    little "$G8W" s_unk     -- -none i.tiff -out o.ti
 # directory it is as unnamed as anything else; under LZW it is not.
 check "predictor -info uncompressed" little "$G8W" s_none -- -info i.tiff
 check "predictor -info lzw"    little "$G8W" s_lzw      -- -info c.tiff
+# NewSubfileType is a set of flags, and its name is spelled out from them.
+for op in -info -verboseinfo; do
+    for setup in s_sub_none s_sub_one s_sub_two s_sub_three s_sub_four \
+                 s_sub_all s_sub_past s_sub_high s_sub_old; do
+        check "subfile $setup $op" little "$G8W" "$setup" -- "$op" i.tiff
+    done
+    # ResolutionUnit has three names and says nothing about any other value.
+    for setup in s_ru_one s_ru_two s_ru_three s_ru_zero s_ru_nine s_ru_hi; do
+        check "resunit $setup $op" little "$G8W" "$setup" -- "$op" i.tiff
+    done
+    check "resunit bad BE $op"   big    "$G8W" s_ru_big  -- "$op" i.tiff
+    check "resunit bad $op dump" little "$G8W" s_ru_zero -- -dump i.tiff
+    # A turned-down field complains after the unknown-field warnings.
+    check "resunit bad + unknown $op" little "$G8W" s_ru_unk -- "$op" i.tiff
+done
 check "g4src -extract 0"   little "$B1G"  s_g4 -- -extract 0 c.tiff -out o.tiff
 check "g4src -extract end" little "$MULTI" s_g4 -- -extract 3 c.tiff -out o.tiff
 # The same narrow depth override applies to a source that is not facsimile to

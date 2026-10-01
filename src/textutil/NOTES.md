@@ -671,7 +671,7 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1097 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1113 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
@@ -701,6 +701,15 @@ either side of it with a word, three blanks after it, a NUL at the head of a
 line with blanks on both sides, and a line that ends with blanks after one. A
 NUL is not shown, and the blanks after it are at the head of their line, so
 they are counted as leading however much text came before it.
+
+A C0 control other than a NUL among blanks is held to all four writers by seven
+fixtures, and a level that opens and one that closes inside a region of blanks
+by four more. The control is not shown and is not a blank, and the blanks after
+it lead their line only where one space, and one space only, separates it from
+text the reader is shown; a NUL needs no such gap. The region is counted as a
+whole whatever levels lie between its blanks, and the level the no-break spaces
+were written under stays open past the end of the region, so text that follows
+it goes on inside the span already open.
 
 The readers are covered at the end of the suite. Each reads a file that was
 written once by the reference tool into a template, which every case then

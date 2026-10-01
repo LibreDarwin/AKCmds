@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "tiffutil.h"
 #include "buf.h"
@@ -34,6 +35,94 @@ usage_error(const char *msg)
 		fprintf(stderr, "Error: %s\n", msg);
 	fputs(usage_text, stderr);
 	return 1;
+}
+
+/* The per-chroma contribution tables behind blue and red.  Each entry is
+   rounded on its own, away from zero on a tie, and *not* against the luma:
+   that is what puts two otherwise identical ties on opposite sides.  With the
+   default blue coefficient a Cb of 3 contributes -221.5, which the reference
+   rounds to -222, so 239 + -222 is 17 where rounding the whole sum would have
+   given 18.  Green is the odd one out and is not built this way. */
+static void
+ycbcr_contrib(double k, int *tab)
+{
+	int c;
+
+	for (c = 0; c < 256; c++) {
+		double v = 2.0 * (1.0 - k) * (c - 128);
+
+		tab[c] = (int)(v >= 0.0 ? floor(v + 0.5) : ceil(v - 0.5));
+	}
+}
+
+/* Convert a two-by-two subsampled YCbCr buffer to RGB in place of the
+   samples.  Six bytes per block go in, twelve come out, so the strip grows by
+   half.  Blue and red add their table entry to the luma; green is one
+   expression rounded once, and its ties fall toward zero rather than away. */
+static int
+ycbcr_to_rgb(unsigned char **rawp, size_t *rawlenp, uint32_t w, uint32_t h,
+    double kr, double kg, double kb)
+{
+	int btab[256], rtab[256];
+	double gcb, gcr;
+	unsigned char *raw = *rawp, *out;
+	size_t need = (size_t)w * h * 3;
+	uint32_t bx, by, x, y;
+
+	/* The reference only ever reads 2x2, whatever the subsampling tag says,
+	   and a zero green coefficient would divide by nothing. */
+	if (w == 0 || h == 0 || (w & 1) != 0 || (h & 1) != 0 || kg == 0.0)
+		return -1;
+	out = malloc(need);
+	if (out == NULL)
+		return -1;
+	ycbcr_contrib(kb, btab);
+	ycbcr_contrib(kr, rtab);
+	gcb = 2.0 * kb * (1.0 - kb) / kg;
+	gcr = 2.0 * kr * (1.0 - kr) / kg;
+	for (by = 0; by < h; by += 2) {
+		for (bx = 0; bx < w; bx += 2) {
+			const unsigned char *in = raw +
+			    ((size_t)(by / 2) * (w / 2) + bx / 2) * 6;
+			int cb = in[4], cr = in[5];
+
+			/* Four luma bytes share one chroma pair, so each of
+			   the four pixels rounds its own copy of the
+			   contribution tables. */
+			for (y = 0; y < 2; y++) {
+				for (x = 0; x < 2; x++) {
+					int luma = in[y * 2 + x];
+					int b = luma + btab[cb];
+					int g = (int)ceil(luma -
+					    gcb * (cb - 128) -
+					    gcr * (cr - 128) - 0.5);
+					int r = luma + rtab[cr];
+					unsigned char *o = out +
+					    (((size_t)by + y) * w + bx + x) * 3;
+
+					if (b < 0)
+						b = 0;
+					else if (b > 255)
+						b = 255;
+					if (g < 0)
+						g = 0;
+					else if (g > 255)
+						g = 255;
+					if (r < 0)
+						r = 0;
+					else if (r > 255)
+						r = 255;
+					o[0] = b;
+					o[1] = g;
+					o[2] = r;
+				}
+			}
+		}
+	}
+	free(*rawp);
+	*rawp = out;
+	*rawlenp = need;
+	return 0;
 }
 
 /* Load directory d as a plain sample buffer in native endianness. */
@@ -386,6 +475,34 @@ notimpl:
 			raw[i + 1] = u;
 		}
 	}
+	/* Three-sample photometric 6 is the one colour space the reference tool
+	 * converts rather than repacks.  Its coefficients default to the ITU-R
+	 * BT.601 set and tag 529 replaces them with three rationals; the
+	 * subsampling and reference-black-white tags are read by the reference
+	 * and then ignored, since it always treats the data as 2x2 and never
+	 * scales the luma. */
+	if (photo == 6 && bps == 8 && srcspp == 3 && rawlen > 0 &&
+	    im->unusable == 0 && im->unopenable == 0) {
+		double kc[3] = { 0.299, 0.587, 0.114 };
+		unsigned char *cf = NULL;
+		uint32_t nc = 0;
+
+		if (tu_get_bytes(t, d, TAG_YCBCRCOEFFICIENT, &cf, &nc) == 0 &&
+		    nc >= 3) {
+			int i;
+
+			for (i = 0; i < 3; i++) {
+				uint32_t num = rd_be32(cf + i * 8, t->be);
+				uint32_t den = rd_be32(cf + i * 8 + 4, t->be);
+
+				if (den != 0)
+					kc[i] = (double)num / (double)den;
+			}
+		}
+		free(cf);
+		ycbcr_to_rgb(&raw, &rawlen, w, h, kc[0], kc[1], kc[2]);
+	}
+
 	/* LogLuv is the one photometric the reference tool lays down as
 	 * something other than the samples it read.  At eight bits a sample it
 	 * will not decode, and rather than guess it fills the image with white;

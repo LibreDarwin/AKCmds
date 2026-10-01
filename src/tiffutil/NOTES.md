@@ -150,13 +150,48 @@ surviving ones are byte-identical to writing them on their own, with no
 leftover bytes in between. So the model is a plain per-directory skip, and a
 file whose directories are all unusable comes out empty.
 
-## Known gap: YCbCr is converted, not copied
+## YCbCr is converted, not copied
 
 A three-sample photometric 6 file is rewritten as photometric 2 with the
-samples colour-converted, so it is not a repack. Matching it needs the
-reference's YCbCr coefficients and rounding, which is a separate derivation;
-the empty-file cases for `spp != 3` above are matched, but the conversion
-itself is not implemented.
+samples colour-converted, so it is not a repack. The samples arrive six bytes
+per 2x2 block — four luma then one chroma pair — and leave as twelve, so the
+strip grows by half and the pixels come out in `(B,G,R)` order.
+
+Blue and red are luma plus a per-chroma contribution table, and each table
+entry is rounded *on its own* rather than against the luma. That is what puts
+two identical-looking ties on opposite sides: with the default blue
+coefficient a Cb of 3 contributes -221.5, which the reference rounds to -222,
+so `239 + -222` is 17 where rounding the whole sum would have given 18. Green
+is the exception — it is one expression rounded once, and its ties fall toward
+zero (`190.5 -> 190`, `252.5 -> 252`) rather than away. Building green from two
+separately rounded chroma tables instead costs 1050 mismatches over a
+6400-record corpus.
+
+Coefficients come from tag 529 and default to the ITU-R BT.601 set
+`(299,587,114)/1000` when it is absent. Tags 530 and 532 are read by the
+reference and then ignored: it always treats the data as 2x2 whatever the
+subsampling tag claims, and it never scales the luma by the reference
+black-white tag.
+
+Three residuals remain, all of them reference-side quirks rather than gaps in
+the model:
+
+- Two exotic coefficient sets round one channel one step away from the
+  formula. `(299,299,402)` wants `-149` where nearest rounding of `-149.5`
+  gives `-150`, which moves a handful of bytes in blue; `(70,290,22)` costs a
+  single red byte on some inputs. An exhaustive search over float widths,
+  accumulation orders and offsets could not find arithmetic that reproduces
+  both, and no model that fixes them keeps the sane coefficient sets exact.
+- Widths holding an *odd* number of 2x2 blocks make the reference read past
+  the end of a block row: the last block's bottom luma pair comes from the
+  next block's top pair, and the final block resolves to white. The output is
+  still deterministic but is not a conversion of the file, so it is not
+  reproduced here.
+- With a pathologically small `Kg` the green channel overruns 255 and the
+  reference occasionally lands a step either side of the clamp.
+
+The sane coefficient sets — including every BT.601 and BT.709 variant, and
+multi-strip layouts — are byte-identical.
 
 ## Text modes are deterministic and directly comparable
 
@@ -280,8 +315,9 @@ Known gaps, as reported by that harness and not yet fixed:
 
 Still open, and therefore *not* pinned down by anything in this file:
 
-- 16-bit LogLuv and YCbCr Photometric 6 are converted rather than copied (see
-  the YCbCr note above); the exact conversion is still unknown.
+- 16-bit LogLuv is converted rather than copied, and its conversion is still
+  unknown. 8-bit YCbCr Photometric 6 is converted too, and is now reproduced;
+  see the YCbCr note above for the model and for the residuals it leaves.
 - The Lab profile carries a build timestamp, so a byte comparison only holds
   within a single second. Anything comparing Lab output needs synchronised
   clocks or a deterministic time injection.
@@ -363,9 +399,11 @@ Validation, all against `/usr/bin/tiffutil` as the oracle:
 - 2400 randomised round trips: random widths up to 3000, heights to 40, both
   polarities, constant and random-run pages, each through `-none`, `-lzw` and
   `-cat`.
-- `tests/tiffutil-parity.sh` passes `942/942` against the release, debug and
+- `tests/tiffutil-parity.sh` passes `953/953` against the release, debug and
   ASan/UBSan builds; the four sibling suites are unchanged at `167`, `65`,
-  `62` and `15`.
+  `62` and `15`. Eleven of those checks are the YCbCr conversion, across the
+  default coefficients, four explicit sets, a multi-strip layout, several
+  directories in one file, a flat-luma image, and both byte orders.
 
 Not characterised: a third-party strip using the G4 extension code (`0000001`)
 or explicit EOLs between rows. The mode table handles H, pass, V0-V+3 and
@@ -474,7 +512,7 @@ Measured against the reference after the fix:
   widths either side of every makeup boundary (63/64, 127/128, 255/256,
   511/512, 1023/1024, 1727/1728/1792, 2559/2560/2561).
 - 333/333 in `tests/tiffutil-parity.sh` at the point the encoder landed, which
-  then carried 51 one-bit-gray cases. The suite has grown since, to 942 checks
+  then carried 51 one-bit-gray cases. The suite has grown since, to 953 checks
   including a report sweep, and passes in full against the release, debug and
   ASan/UBSan builds.
 

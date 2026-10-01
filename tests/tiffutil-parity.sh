@@ -116,10 +116,33 @@ for spec in pages:
     nex = int(spec[8]) if len(spec) > 8 and spec[8] else (1 if spp == 4 else 0)
     xval = int(spec[9]) if len(spec) > 9 and spec[9] else 2
     fill = int(spec[10]) if len(spec) > 10 and spec[10] else None
+    # Photometric 6 is the one case whose samples are not stored per pixel, so
+    # the coefficient tag is how a fixture selects a set other than the BT.601
+    # default.  It is "kr,kg,kb" or empty for absent, which exercises the
+    # default path rather than the tag being read.
+    coeffs = spec[11].split(',') if len(spec) > 11 and spec[11] else None
 
     mask = (1 << bps) - 1
     spr = w * spp                        # samples per row
-    if bps < 8:
+    if photo == 6 and bps == 8 and spp == 3:
+        # Six bytes per 2x2 block: four luma then one chroma pair, blocks in
+        # row-major order.  A strip therefore starts on a block row, so the
+        # rows per strip is forced even; a fixture asking for an odd one would
+        # otherwise be describing a layout the tag cannot express.
+        if rps % 2:
+            rps += 1
+        bpl = (w // 2) * 6
+        px = bytearray()
+        for by in range(h // 2):
+            for bx in range(w // 2):
+                for p in range(4):
+                    v = fill if fill is not None else \
+                        (bx * 37 + by * 53 + p * 11) & 0xFF
+                    px.append(v & 0xFF)
+                for k in (4, 5):
+                    v = fill if fill is not None else (bx * 29 + by * 61 + k * 7) & 0xFF
+                    px.append(v & 0xFF)
+    elif bps < 8:
         # Samples narrower than a byte are really bit packed, with each row
         # starting on a byte boundary.  Writing a whole byte per sample here
         # would make the fixture claim a depth its bytes do not honour, and
@@ -149,11 +172,15 @@ for spec in pages:
             for i in range(spp, spr):
                 px[base + i] = (px[base + i] - px[base + i - spp]) & 0xFF
 
+    # A photometric 6 buffer holds two image rows per buffer row, so strip
+    # boundaries have to be converted from image rows before they index into
+    # it.  rps is forced even above, so the division is exact.
+    rowdiv = 2 if photo == 6 and bps == 8 and spp == 3 else 1
     nstrips = (h + rps - 1) // rps
     chunks = []
     for s in range(nstrips):
         y0, rows = s * rps, min(rps, h - s * rps)
-        raw = bytes(px[y0 * bpl:(y0 + rows) * bpl])
+        raw = bytes(px[(y0 // rowdiv) * bpl:((y0 + rows) // rowdiv) * bpl])
         if comp == 32773:
             chunks.append(packbits(raw))
         elif comp == 1:
@@ -216,6 +243,15 @@ for spec in pages:
     ]
     if pred != 1:
         entries.append(entry(317, 3, 1, [pred], 0))
+    if photo == 6:
+        # Tag 530 states the 2x2 the samples are actually stored in.  The
+        # reference reads it and ignores it, but a fixture that omits it is
+        # not a faithful YCbCr file, so it is always written.
+        entries.append(entry(530, 3, 2, [2, 2], 0))
+        if coeffs:
+            ycbcr_off = put([(int(coeffs[0]), 1000), (int(coeffs[1]), 1000),
+                             (int(coeffs[2]), 1000)], 5)
+            entries.append(entry(529, 5, 3, [], ycbcr_off))
     if xa_off:
         entries.append(entry(338, 3, nex, [xval] * nex, xa_off))
     if cm_off:
@@ -344,6 +380,19 @@ BIG="128,96,8,3,2"
 # Multi-strip: the second field is rows-per-strip.
 STRIPED="40,40,8,1,1,1,1,8"
 STRIPED3="40,40,8,3,2,1,1,16"
+# Photometric 6, which is converted rather than copied.  The trailing field is
+# the coefficient tag as "kr,kg,kb", empty for the BT.601 default.  Widths hold
+# an even number of 2x2 blocks: an odd count makes the reference read past the
+# end of a block row, so it cannot be used to pin the conversion down.
+YCBCR="16,16,8,3,6"
+YCBCRW="64,48,8,3,6"                                  # both dimensions even
+YCBCRS="40,40,8,3,6,1,1,8"                            # multi-strip
+YCBCR601="16,16,8,3,6,1,1,16,0,2,,299,587,114"        # the default, stated
+YCBCR709="16,16,8,3,6,1,1,16,0,2,,299,338,100"        # BT.709
+YCBCRFULL="32,32,8,3,6,1,1,32,0,2,,229,587,114"       # full range
+YCBCRF16="16,16,8,3,6,1,1,16,0,2,,100,500,400"        # another legal set
+YCBCRMULTI="16,16,8,3,6 32,32,8,3,6 8,8,8,3,6"
+YCBCRFLAT="32,32,8,3,6,1,1,32,0,2,7,,299,587,114"     # every luma the same
 # Surplus alpha channels, then the extra-sample value: the reference tool
 # keeps one of them, so these are how the collapse gets pinned down.
 XA2="16,8,8,5,2,1,1,8,2"        # RGB plus two extrasamples
@@ -433,6 +482,22 @@ for op in -none -lzw -packbits; do
     check "$op BE 16-8-2-1-1"  big "$B2G"   s_none -- "$op" i.tiff -out o.tiff
     check "$op BE 16-8-4-3-2"  big "$B4RGB" s_none -- "$op" i.tiff -out o.tiff
     check "$op BE 16-8-1-1-3"  big "$BW1PAL" s_none -- "$op" i.tiff -out o.tiff
+done
+
+# --- YCbCr, which is converted rather than copied -----------------------------
+# Only -none: the reference tool does not lay down a converted YCbCr image as
+# compressed, so a compressed fixture would be comparing its failure rather
+# than the conversion.  The shapes cover the default coefficients, several
+# explicit ones, a multi-strip layout, several directories in one file, and a
+# flat-luma image that puts the clamp on every channel.
+for shape in "$YCBCR" "$YCBCRW" "$YCBCRS" "$YCBCR601" "$YCBCR709" "$YCBCRFULL" \
+             "$YCBCRF16" "$YCBCRMULTI" "$YCBCRFLAT"; do
+    check "-none ycbcr $(printf '%s' "$shape" | tr ',' '-')" \
+        little "$shape" s_none -- -none i.tiff -out o.tiff
+done
+for shape in "$YCBCRW" "$YCBCR709"; do
+    check "-none ycbcr BE $(printf '%s' "$shape" | tr ',' '-')" \
+        big "$shape" s_none -- -none i.tiff -out o.tiff
 done
 
 # --- one bit of gray, which the reference tool G4-compresses -----------------

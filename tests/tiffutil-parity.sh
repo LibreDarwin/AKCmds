@@ -459,6 +459,22 @@ s_ru_big()   { mkextra "$1/i.tiff" big 296=0; }
 # warning, not among them.
 s_ru_unk()   { mkextra "$1/i.tiff" little 296=0,347=1; }
 
+# FillOrder has two names, Orientation eight, and a value outside either costs
+# the line and draws the complaint instead.
+s_fo_one()   { mkextra "$1/i.tiff" little 266=1; }
+s_fo_two()   { mkextra "$1/i.tiff" little 266=2; }
+s_fo_zero()  { mkextra "$1/i.tiff" little 266=0; }
+s_fo_three() { mkextra "$1/i.tiff" little 266=3; }
+s_fo_big()   { mkextra "$1/i.tiff" big 266=0; }
+for i in 0 1 2 3 4 5 6 7 8 9; do
+    eval "s_or_$i() { mkextra \"\$1/i.tiff\" little 274=$i; }"
+done
+s_or_hi()    { mkextra "$1/i.tiff" little 274=65535; }
+# All three refusals in one directory, on their own and behind an unnamed field,
+# to pin that they follow the order the entries sit in.
+s_ref_all()  { mkextra "$1/i.tiff" little 266=0,274=0,296=0; }
+s_ref_unk()  { mkextra "$1/i.tiff" little 266=0,274=0,296=0,347=1; }
+
 # Single-page shapes.  w,h,bps,spp,photo.
 G8="16,16,8,1,1"          # 8-bit gray
 G8W="64,48,8,1,1"         # 8-bit gray, both dimensions even
@@ -657,6 +673,18 @@ for op in -info -verboseinfo; do
     check "resunit bad $op dump" little "$G8W" s_ru_zero -- -dump i.tiff
     # A turned-down field complains after the unknown-field warnings.
     check "resunit bad + unknown $op" little "$G8W" s_ru_unk -- "$op" i.tiff
+    # FillOrder names two orders and Orientation eight; the rest lose the line.
+    for setup in s_fo_one s_fo_two s_fo_zero s_fo_three; do
+        check "fillorder $setup $op" little "$G8W" "$setup" -- "$op" i.tiff
+    done
+    check "fillorder bad BE $op" big "$G8W" s_fo_big -- "$op" i.tiff
+    for i in 0 1 2 3 4 5 6 7 8 9; do
+        check "orientation s_or_$i $op" little "$G8W" "s_or_$i" -- "$op" i.tiff
+    done
+    check "orientation bad hi $op" little "$G8W" s_or_hi -- "$op" i.tiff
+    # Every refusal in one directory, alone and behind an unnamed field.
+    check "refused all $op"  little "$G8W" s_ref_all -- "$op" i.tiff
+    check "refused all + unknown $op" little "$G8W" s_ref_unk -- "$op" i.tiff
 done
 check "g4src -extract 0"   little "$B1G"  s_g4 -- -extract 0 c.tiff -out o.tiff
 check "g4src -extract end" little "$MULTI" s_g4 -- -extract 3 c.tiff -out o.tiff

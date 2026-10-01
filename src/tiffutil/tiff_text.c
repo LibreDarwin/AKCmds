@@ -165,11 +165,11 @@ orientation_phrase(uint32_t o)
 	case 2: return "row 0 top, col 0 rhs";
 	case 3: return "row 0 bottom, col 0 rhs";
 	case 4: return "row 0 bottom, col 0 lhs";
-	case 5: return "row 0 left, col 0 top";
-	case 6: return "row 0 right, col 0 top";
-	case 7: return "row 0 right, col 0 bottom";
-	case 8: return "row 0 left, col 0 bottom";
-	default: return "unknown";
+	case 5: return "row 0 lhs, col 0 top";
+	case 6: return "row 0 rhs, col 0 top";
+	case 7: return "row 0 rhs, col 0 bottom";
+	case 8: return "row 0 lhs, col 0 bottom";
+	default: return NULL;
 	}
 }
 
@@ -280,17 +280,37 @@ tu_cmd_info(const char *path, int verbose)
 		}
 		/* A field can also be turned down when it is set, and that is a
 		 * later and separate complaint: still on stderr, but after
-		 * every unknown-field warning the directory drew, and one per
-		 * offending field.  ResolutionUnit is the only one of these
-		 * checked here; the rest of the family is written down in
-		 * NOTES.md rather than guessed at. */
-		{
-			uint32_t unit = 0;
+		 * every unknown-field warning the directory drew, one per
+		 * offending field, and in the order the entries sit in.  The
+		 * three tags here lose only the line; the rest of the family
+		 * refuses harder, failing the whole file open, and is written
+		 * down in NOTES.md rather than guessed at. */
+		for (uint32_t i = 0; i < t.ndirs[d]; i++) {
+			uint16_t tag = t.ents[d][i].tag;
+			const char *name;
+			uint32_t hi, val = 0;
 
-			if (tu_get_uint(&t, d, TAG_RESOLUTIONUNIT, &unit) == 0
-			    && unit - 1u > 2)
+			switch (tag) {
+			case TAG_FILLORDER:
+				name = "FillOrder";
+				hi = 2;
+				break;
+			case TAG_ORIENTATION:
+				name = "Orientation";
+				hi = 8;
+				break;
+			case TAG_RESOLUTIONUNIT:
+				name = "ResolutionUnit";
+				hi = 3;
+				break;
+			default:
+				continue;
+			}
+			/* Every one of them starts at 1. */
+			if (tu_get_uint(&t, d, tag, &val) == 0 &&
+			    (val == 0 || val > hi))
 				tu_warn("_TIFFVSetField: %s: Bad value %u for"
-				    " \"ResolutionUnit\" tag.\n", path, unit);
+				    " \"%s\" tag.\n", path, val, name);
 		}
 		{
 			uint32_t cspp = 0, ctype = 0;
@@ -382,16 +402,19 @@ tu_cmd_info(const char *path, int verbose)
 		}
 		if (tu_has_tag(&t, d, TAG_EXTRASAMPLES))
 			printf("  Alpha: Present\n");
-		if (tu_has_tag(&t, d, TAG_FILLORDER)) {
-			tu_get_uint(&t, d, TAG_FILLORDER, &v);
+		/* Two orders, and a value outside them loses the line rather
+		 * than being called unknown. */
+		if (tu_get_uint(&t, d, TAG_FILLORDER, &v) == 0 && v != 0 && v <= 2)
 			printf("  FillOrder: %s\n", v == 2 ? "lsb-to-msb" : "msb-to-lsb");
-		}
 		if (tu_get_uint(&t, d, TAG_PREDICTOR, &v) == 0 && v != 1)
 			printf("  Predictor: %s\n",
 			    v == 2 ? "horizontal differencing" : "floating point");
-		if (tu_has_tag(&t, d, TAG_ORIENTATION)) {
-			tu_get_uint(&t, d, TAG_ORIENTATION, &v);
-			printf("  Orientation: %s\n", orientation_phrase(v));
+		{
+			const char *ori;
+
+			if (tu_get_uint(&t, d, TAG_ORIENTATION, &v) == 0 &&
+			    (ori = orientation_phrase(v)) != NULL)
+				printf("  Orientation: %s\n", ori);
 		}
 		printf("  Samples/Pixel: %u\n", spp);		tu_get_uint(&t, d, TAG_ROWSPERSTRIP, &rps);
 		{

@@ -282,6 +282,19 @@ mkfix() {
     printf '\xe2\x80\xaa \001 B\n' >"$d/ctlrearmlevel.txt"
     printf 'A \001  \n' >"$d/ctlrearmtail.txt"
     printf 'A \010 B\n' >"$d/ctlrearmbs.txt"
+    # A level that opens and one that closes inside a region of blanks.  The
+    # blanks are counted over the whole of the region and the level the no-break
+    # spaces were written under stays open past the end of it, so the spaces and
+    # the text after them share one span rather than the span being closed and
+    # opened again.  lvlrearmclosemark, lvlrearmclosenul and lvlrearmcloseemoji
+    # are that shape ending in a mark, in a NUL and in a character that is a
+    # block of its own, and lvlrearmcloseends is the same shape with nothing
+    # after the region at all, where the only span left open is the one the
+    # paragraph itself closes.
+    printf '\xe2\x80\xae \xe2\x80\xab\xe2\x80\xac\xd8\x9c\n' >"$d/lvlrearmclosemark.txt"
+    printf '\xe2\x80\xad\t\xe2\x80\xab\xe2\x80\xac\000\n' >"$d/lvlrearmclosenul.txt"
+    printf '\xe2\x80\xab \xe2\x80\xae\xe2\x80\xac\xf0\x9f\x98\x80\n' >"$d/lvlrearmcloseemoji.txt"
+    printf '\xe2\x80\xab \xe2\x80\xae\xe2\x80\xac\n' >"$d/lvlrearmcloseends.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
     # ends a line inside a paragraph and U+2029 ends the paragraph, so these
@@ -923,11 +936,14 @@ for f in nulrearm nulrearmthree nulrearmat nulrearmtail; do
     check "convert wordml $f" -convert wordml -output out "$f.txt"
 done
 
-# The same for a C0 control other than a NUL, which all four writers are held to
-# as well: it is not shown, and the blanks after it lead their line only where a
-# single word gap separates it from text the reader is shown.
+# A C0 control among blanks, and a level that opens and one that closes inside a
+# region of blanks, which all four writers are held to as well: the control is
+# not shown and the blanks after it lead their line only where a single word gap
+# separates it from text the reader is shown, and the level the blanks were
+# written under stays open past the end of the region.
 for f in ctlrearmword ctlrearmtwo ctlrearmindent ctlrearmtabgap \
-    ctlrearmlevel ctlrearmtail ctlrearmbs; do
+    ctlrearmlevel ctlrearmtail ctlrearmbs lvlrearmclosemark lvlrearmclosenul \
+    lvlrearmcloseemoji lvlrearmcloseends; do
     for fmt in html rtf txt; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done

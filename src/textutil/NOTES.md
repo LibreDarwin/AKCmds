@@ -1,9 +1,13 @@
 # textutil reverse-engineering notes
 
-Observations from `/usr/bin/textutil` on Darwin 25 (arm64e). All are black-box
-probes; nothing was disassembled or read out of the binary. The companion
-harness is `tests/textutil-parity.sh`, which runs both tools over the same
-fixtures and compares exit status, both streams, and every byte produced.
+Observations from `/usr/bin/textutil` on Darwin 25 (arm64e). Nearly all are
+black-box probes. The HTML writer was then read out of the shipped binaries:
+`/usr/bin/textutil` is a thin driver whose `__text` is 11,600 bytes and holds no
+HTML emitter, and the emitter is `-[NSHTMLWriter _generateHTMLForWebKit:]` in
+`/System/Library/PrivateFrameworks/UIFoundation.framework/UIFoundation`, 9,784
+bytes at `0x1861a18e4` in the arm64e dyld shared cache. The companion harness is
+`tests/textutil-parity.sh`, which runs both tools over the same fixtures and
+compares exit status, both streams, and every byte produced.
 
 ## Scope
 
@@ -450,7 +454,14 @@ Each writer says a run boundary in its own way.
   level of a paragraph's stack gets a class of its own, in order of first use,
   and a level inside it gets an inline style. A run of no-break spaces spans
   whatever levels the text around it is under, and only the markup is cut where
-  the levels change.
+  the levels change. A region of blanks ends by closing the spans the levels
+  opened, but only when a level is still open when the region ends: a level that
+  opens and one that closes inside the region leave the stack as it was, and the
+  spans they would have opened and closed are written for neither, so text that
+  follows the region goes on inside the span already open. That last point is
+  what the four HTML cases that used to differ here turned out to be: none of
+  them is a rule about controls at all, and each minimises to five characters of
+  the shape `<level> <blank> <level> <close>`.
 
 ## The two Unicode separators are breaks, and only the WordML writer knew it
 
@@ -642,17 +653,6 @@ a feature that exists on both sides.
   database is consulted.
 - **`-excludedelements`** selects an XHTML serialisation that is not
   implemented; the argument is parsed and validated.
-- **Four HTML cases with more than one control, or a control beside a bidi
-  mark, still differ.** The one-control case is settled above, and the rule
-  there gives nothing for a second one: with two controls either side of a
-  word gap the run after the second is counted between two words, and a
-  control followed by a mark and a space is counted differently again from one
-  followed by the space alone. The fourth of the four has no control in it at
-  all and is a marks-and-levels case that belongs with the block cases above.
-  These are left rather than guessed at, and the sweep in this file says the
-  one-control reading is right in all 12960 shapes it covers.
-
-
 - **Writers write in place rather than through a temporary file**, so a
   destination that is a symlink to a directory is followed and fails where the
   reference tool replaces the link, and an existing read-only regular file

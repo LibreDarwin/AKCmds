@@ -479,9 +479,12 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
 		inside++;
 		written++;
 	}
-	if (moved) {
+	if (moved && embed_stale(e)) {
 		/* a level with no space after it in this region, and the
-		 * reference writes none of it */
+		 * reference writes none of it.  A level that opened and one
+		 * that closed inside the region leave the spans as they were,
+		 * and those the reference leaves in place too, so only a
+		 * level still open at the end of the region closes them. */
 		embed_close(s, e);
 	}
 	if (open)

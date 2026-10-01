@@ -671,19 +671,10 @@ a feature that exists on both sides.
 - **The five empty and nested HTML block cases listed above** differ by one or
   two characters each, and are left rather than fixed by a rule that would
   break more of the battery than it would repair.
-- **C0 controls other than NUL, when they appear between blanks**: the
-  reference tool does not treat them all the same way as NUL for the purpose
-  of starting the blank run's line state.  For example, a single space before
-  the control and spaces after it makes the following run behave as if it were
-  at the head in some cases and not in others depending on the count, and the
-  exact mapping varies slightly across controls.  This is deferred because any
-  attempt to model it by a small generalization breaks other parts of the
-  battery without a clear reason from the text; the current implementation only
-  treats U+0000 (NUL) as re-arming the head.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1069 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1097 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its

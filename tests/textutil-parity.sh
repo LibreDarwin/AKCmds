@@ -261,13 +261,27 @@ mkfix() {
     # counted as leading however much text came before it: nulrearm has one
     # blank either side of it and a word, nulrearmthree three blanks, nulrearmat
     # a NUL at the head of a line with blanks on both sides of them, and
-    # nulrearmtail ends the line with blanks after the NUL.  The other controls
-    # are written the same way and are not here, since the blanks after one of
-    # those are counted between two words; see the divergences in NOTES.md.
+    # nulrearmtail ends the line with blanks after the NUL.
     printf 'A\0 B\n' >"$d/nulrearm.txt"
     printf 'A\0   B\n' >"$d/nulrearmthree.txt"
     printf '  \0  \n' >"$d/nulrearmat.txt"
     printf '\0  \n' >"$d/nulrearmtail.txt"
+    # A C0 control other than a NUL, and blanks after it.  It is not shown and
+    # it is not a blank either, but the blanks after it are counted at the head
+    # of their line where one space, and one space only, separates it from text
+    # the reader is shown, and between two words otherwise.  ctlrearmword has
+    # that one space with a word before it, ctlrearmtwo has two spaces,
+    # ctlrearmindent has the one space at the head of the line where it is an
+    # indent rather than a word gap, ctlrearmtabgap has a tab before the space,
+    # ctlrearmlevel a level before it, ctlrearmtail blanks at the end of the
+    # line, and ctlrearmbs is the first of these over a backspace.
+    printf 'A \001 B\n' >"$d/ctlrearmword.txt"
+    printf 'A  \001 B\n' >"$d/ctlrearmtwo.txt"
+    printf ' \001 B\n' >"$d/ctlrearmindent.txt"
+    printf 'A\t \001 B\n' >"$d/ctlrearmtabgap.txt"
+    printf '\xe2\x80\xaa \001 B\n' >"$d/ctlrearmlevel.txt"
+    printf 'A \001  \n' >"$d/ctlrearmtail.txt"
+    printf 'A \010 B\n' >"$d/ctlrearmbs.txt"
     # A lone carriage return between two lines, which is a paragraph mark of
     # its own, and the two Unicode line and paragraph separators.  U+2028
     # ends a line inside a paragraph and U+2029 ends the paragraph, so these
@@ -903,6 +917,17 @@ done
 # A NUL among blanks, which all four writers are held to: it is not shown, and
 # it leaves the blanks after it at the head of their line.
 for f in nulrearm nulrearmthree nulrearmat nulrearmtail; do
+    for fmt in html rtf txt; do
+        check "convert $fmt $f" -convert "$fmt" "$f.txt"
+    done
+    check "convert wordml $f" -convert wordml -output out "$f.txt"
+done
+
+# The same for a C0 control other than a NUL, which all four writers are held to
+# as well: it is not shown, and the blanks after it lead their line only where a
+# single word gap separates it from text the reader is shown.
+for f in ctlrearmword ctlrearmtwo ctlrearmindent ctlrearmtabgap \
+    ctlrearmlevel ctlrearmtail ctlrearmbs; do
     for fmt in html rtf txt; do
         check "convert $fmt $f" -convert "$fmt" "$f.txt"
     done

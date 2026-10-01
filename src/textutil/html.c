@@ -488,29 +488,75 @@ emit_space_region(struct sink *s, const char *p, size_t i, size_t j,
 		sink_str(s, "</span>");
 }
 
+/* Whether anything the reader is shown comes before p[k].  A tab is something
+ * the reader is shown and a level or a control is not, and the answer is what
+ * tells a word gap from the indent at the front of a line. */
+static int
+shown_before(const char *p, size_t k)
+{
+	size_t j = 0;
+
+	while (j < k) {
+		if (tu_bidi_embed((const unsigned char *)p + j, k - j) != 0 ||
+		    tu_bidi_open((const unsigned char *)p + j, k - j) != 0) {
+			j += 3;
+			continue;
+		}
+		if ((unsigned char)p[j] < 0x20 && p[j] != '\t' && p[j] != '\n' &&
+		    p[j] != '\r') {
+			j++;
+			continue;
+		}
+		return 1;
+	}
+	return 0;
+}
+
 /* Whether p[i] is nothing but the levels a run is under, and whether p[j] is
  * followed by nothing but the levels a run is under and blanks.  A run of
  * spaces is at the head of a line when only levels come before it, and at the
  * tail when neither levels nor blanks come after it.
  *
- * A NUL counts for nothing here but arms the head of the line again, so a run
- * of blanks that follows one leads its line however much text came before it:
- * the reference tool has the run at the head of a line, and so counts it as
- * leading where the same run after a word would be between two words.  It also
- * closes the run before it, since ends_line stops at one, so that run is never
- * the one that fills a blank line.
+ * A control of no account to the writer arms the head of the line again, so a
+ * run of blanks that follows one leads its line however much text came before
+ * it.  It also closes the run before it, since ends_line stops at one, so that
+ * run is never the one that fills a blank line.
  *
- * The other twenty-six C0 controls are not settled, and a sweep of them says
- * they do not all go the way NUL does: taking them to, so that every one of
- * them armed the head, turns fifteen wrong shapes per control into a hundred
- * and five.  The few that do arm it are not yet read, and are in the
- * divergences in NOTES.md. */
+ * A NUL arms the head on any count, which is the first of the two readings and
+ * the one that came first.  The other twenty-six need a word gap between them
+ * and the run, where a NUL does not: one space, and one space only, with
+ * something the reader is shown in front of it.  So 'A <control>   B' has its
+ * run at the head, and 'A  <control>   B', ' <control>   B' and
+ * '<level> <control>   B' have theirs between two words, the one in the middle
+ * of those because a space at the head of a line is an indent rather than a
+ * word gap.  A tab in front of the space leaves it a word gap and does arm the
+ * head, and a tab after it does not, which is what shown_before is for.
+ *
+ * A sweep of the twenty-seven controls over blank runs either side of them, in
+ * every shape of lead, of blank count and of what follows, is what settles
+ * this: it is 12960 shapes, and taking the twenty-six to arm the head on any
+ * count at all, which is the simplest reading to try, turns fifteen wrong
+ * shapes per control into a hundred and five. */
+static int
+arms_line(const char *p, size_t i)
+{
+	if (i == 0)
+		return 1;
+	if (p[i - 1] == '\0')
+		return 1;
+	if (p[i - 1] < 0x20 && p[i - 1] != '\t' && p[i - 1] != '\n' &&
+	    p[i - 1] != '\r')
+		return i >= 2 && p[i - 2] == ' ' && (i < 3 || p[i - 3] != ' ') &&
+		    shown_before(p, i - 2);
+	return 0;
+}
+
 static int
 opens_line(const char *p, size_t i)
 {
 	while (i >= 3 && tu_bidi_embed((const unsigned char *)p + i - 3, 3) != 0)
 		i -= 3;
-	return i == 0 || (i > 0 && p[i - 1] == '\0');
+	return arms_line(p, i);
 }
 
 static int

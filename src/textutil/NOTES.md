@@ -642,18 +642,15 @@ a feature that exists on both sides.
   database is consulted.
 - **`-excludedelements`** selects an XHTML serialisation that is not
   implemented; the argument is parsed and validated.
-- **Fifteen HTML cases where a C0 control other than NUL sits between two
-  spaces differ.** A NUL among blanks is handled: it is not shown, and the
-  blanks after it are at the head of their line, so they are counted as leading
-  however much text came before the NUL. The other C0 controls do not do that,
-  and the blanks after one of those are counted between two words where the
-  reference tool writes them at the head of a line. What decides it is not the
-  run on its own: a run of one space before the control gives a run that leads,
-  a run of two or three does not, and a second control between the runs changes
-  it again, so the rule is not written here rather than guessed at one that
-  would more likely break the cases that already agree. A broad differential
-  over the C0 controls, 12960 cases, agrees on all but 420 of them, and none of
-  those 420 is a NUL. The NUL cases are four of the fixtures in the suite.
+- **Four HTML cases with more than one control, or a control beside a bidi
+  mark, still differ.** The one-control case is settled above, and the rule
+  there gives nothing for a second one: with two controls either side of a
+  word gap the run after the second is counted between two words, and a
+  control followed by a mark and a space is counted differently again from one
+  followed by the space alone. The fourth of the four has no control in it at
+  all and is a marks-and-levels case that belongs with the block cases above.
+  These are left rather than guessed at, and the sweep in this file says the
+  one-control reading is right in all 12960 shapes it covers.
 
 
 - **Writers write in place rather than through a temporary file**, so a

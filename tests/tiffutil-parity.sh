@@ -583,6 +583,72 @@ PYEOF
 for g4ext_sel in 000 001 010 011 100 101 110 111; do
     eval "s_g4ext_$g4ext_sel() { g4ext \"\$1\" $g4ext_sel; }"
 done
+# A G4 strip rebuilt out of a bit string: $1 is the directory, $2 the bits in
+# front of the strip the reference wrote, $3 keep or drop for that strip
+# itself, and $4 the bits after it.  The reference writes an end of block mark
+# exactly once, at the end, and never writes a code word that is in no table, so
+# moving the mark or ending the strip on bits that are not a code are the only
+# way to compare damaged streams.  The reference recovers from all of them
+# rather than refusing the conversion, so a case here that ends the strip early
+# leaves the rows it never reached at the all colour 0 line.
+g4bits() {
+    "$ORACLE" -none "$1/i.tiff" -out "$1/c.tiff" >/dev/null 2>&1 || return 1
+    python3 - "$1/c.tiff" "$2" "$3" "$4" <<'PYEOF' || return 1
+import struct, sys
+
+path, pre, mid, post = sys.argv[1:5]
+d = bytearray(open(path, "rb").read())
+e = "<" if d[:2] == b"II" else ">"
+ifd = struct.unpack_from(e + "I", d, 4)[0]
+n = struct.unpack_from(e + "H", d, ifd)[0]
+
+strip = cnt = None
+for i in range(n):
+    tag, typ, count = struct.unpack_from(e + "HHI", d, ifd + 2 + i * 12)
+    if typ != 4 or count != 1:          # the strip tables have to be inline
+        continue
+    val = struct.unpack_from(e + "I", d, ifd + 2 + i * 12 + 8)[0]
+    if tag == 273:
+        strip = val
+    elif tag == 279:
+        cnt = val
+if strip is None or cnt is None:
+    sys.exit("no inline strip table")
+
+def bits_of(b):
+    return "".join("1" if (b[i >> 3] >> (7 - (i & 7))) & 1 else "0"
+                   for i in range(len(b) * 8))
+
+# The strip the reference wrote is trimmed back to its last code and given the
+# end of block mark back, so a case reads the same whichever end it splices.
+body = "" if mid == "drop" else bits_of(d[strip:strip + cnt]).rstrip("0") + "1"
+bits = pre + body + post
+size = (len(bits) + 7) // 8
+new = bytearray(size)
+for i, b in enumerate(bits):
+    if b == "1":
+        new[i // 8] |= 1 << (7 - (i & 7))
+
+# The strip is repointed at the copy appended here, so nothing that was
+# already in the file moves and every other tag stays as the reference wrote it.
+off = len(d)
+d += new
+for i in range(n):
+    p = ifd + 2 + i * 12
+    tag = struct.unpack_from(e + "H", d, p)[0]
+    if tag == 273:
+        struct.pack_into(e + "I", d, p + 8, off)
+    elif tag == 279:
+        struct.pack_into(e + "I", d, p + 8, size)
+open(path, "wb").write(bytes(d))
+PYEOF
+}
+s_g4bits_eofb()      { g4bits "$1" 000000000001 keep  ""; }
+s_g4bits_eofb_junk() { g4bits "$1" 000000000001 keep  111111111111111111111111; }
+s_g4bits_junk()      { g4bits "$1" 111111111111111111111111 drop ""; }
+s_g4bits_tail_junk() { g4bits "$1" "" keep 111111111111111111111111; }
+s_g4bits_tail_zero() { g4bits "$1" "" keep 000000000000000000000000; }
+s_g4bits_tail_alt()  { g4bits "$1" "" keep 101010101010101010101010; }
 s_pred() {
     "$ORACLE" -lzw -out /dev/null "$1/i.tiff" >/dev/null 2>&1
     :
@@ -1118,6 +1184,15 @@ done
 check "g4ext BE -none" big "16,1,1,1,1" s_g4ext_000 -- -none c.tiff -out o.tiff
 check "g4ext -none"      little "32,1,1,1,1" s_g4ext_011 -- -none c.tiff -out o.tiff
 check "g4ext 64 -none"   little "64,1,1,1,1" s_g4ext_101 -- -none c.tiff -out o.tiff
+# An end of block mark ends the strip, so one in front of the rows leaves them
+# all at the all colour 0 line, and bits that are in no code end the row they
+# are in without taking the conversion down with them.
+for g4bits_case in eofb eofb_junk junk tail_junk tail_zero tail_alt; do
+    check "g4bits $g4bits_case -none" little "$B1G" \
+        "s_g4bits_$g4bits_case" -- -none c.tiff -out o.tiff
+done
+check "g4bits eofb -info" little "$B1G" s_g4bits_eofb -- -info c.tiff
+check "g4bits eofb BE"    big    "$B1G" s_g4bits_eofb -- -none c.tiff -out o.tiff
 # An unnamed field draws a warning on stderr, but only where the directory is
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks
 # the raw IFD itself and says nothing, and neither does a conversion.

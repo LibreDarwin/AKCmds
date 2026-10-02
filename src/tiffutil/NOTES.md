@@ -938,10 +938,40 @@ position to the end of the line and jumps to the row-end handler. The patches in
 that build do not touch the fax decoder, so the two routes agree by
 construction rather than by coincidence.
 
-A bad code word after an extension is worth separating from this: the reference
-logs it and ends that row, then carries on, where this decoder fails the
-conversion. The fixtures keep the bits after the extension unexamined so the
-comparison covers the code itself rather than that separate recovery path.
+The extension code is not the only way to end a row early, so the fixtures here
+use a one-row image: the row the extension leaves behind is then fixed by the code
+alone, rather than by whatever the three bits after it happen to decode to.
+
+### Damaged G4 strips
+
+There is no separate "bad code word" path to recover along, which is worth
+recording because it is easy to assume there is. All 128 entries of libtiff's
+`TIFFFaxMainTable` are valid, so its seven bit main table lookup always returns a
+state and never falls through to `unexpected("MainTable")`. Its
+`unexpected("WhiteTable")`, `unexpected("BlackTable")` and `unexpected("VL")`
+branches are reachable, but only from strips no encoder produces.
+
+What is reachable, and what the reference actually does, is recovery:
+
+* **An end of block mark ends the strip, not just one row.** Rows past it are
+  left at the all colour 0 line the decoder starts from, which is what a strip
+  carrying the mark up front decodes to. libtiff consumes that mark while
+  finishing the row before it, so the next row would otherwise start on the wrong
+  bit.
+* **Bits that are in no table end the row they are in.** The rest of the row
+  keeps the colour current at that point and decoding moves on to the next row.
+  The reference says nothing about it, because its seven bit table always has a
+  state and so it never runs out of codes; the two quiet paths agree without a
+  message being involved.
+* **Neither of them fails the conversion.** A decoder that treats an unreadable
+  code as fatal turns both cases into an error the reference does not raise.
+
+The `g4bits` fixtures cover this by rebuilding a strip out of a bit string: an
+end of block mark in front of the rows, bits that are in no code in place of the
+rows, and bits that are in no code after the end of block mark. The remaining
+difference is the width of the window in which the reference accepts a mark that
+starts a few bits off a row boundary, which is a property of how far its table
+lookup can see rather than of the recovery itself.
 
 ### G4 encoding algorithm, byte-exact (settled by differential testing)
 

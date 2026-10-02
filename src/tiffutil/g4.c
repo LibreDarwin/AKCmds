@@ -613,7 +613,13 @@ g4_paint(unsigned char *row, int32_t from, int32_t to, int colour, int invert)
  * line is the previously decoded row, or an imaginary all colour 0 line for the
  * first.  A vertical code carries a1 - b1, so a1 comes from b1 and not from
  * a0; a0 and b1 differ on the first element of a line, where a0 is the
- * imaginary pixel at -1 and b1 is the reference line's first change. */
+ * imaginary pixel at -1 and b1 is the reference line's first change.
+ *
+ * Returns 1 for an end of block mark, which ends the strip rather than just
+ * this line, 0 for a line that ran out or ended, and -1 for a strip too damaged
+ * to decode at all.  A line that ends early keeps the rest of its width in the
+ * colour current at that point, which is what the reference does with one it
+ * cannot read the rest of. */
 static int
 g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref,
     uint32_t width, int invert)
@@ -630,16 +636,40 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		int kind;
 		int32_t d;
 
-		if (a0 >= (int32_t)width)
+		if (a0 >= (int32_t)width) {
+			/* A finished line is followed either by the next
+			 * line's codes or by the end of block mark that
+			 * ends the strip.  The reference reads that mark
+			 * off before it moves on, so it has to be consumed
+			 * here or the next line would start on the wrong
+			 * bit. */
+			size_t save = r->bitpos;
+
+			if (g4_match_mode(r, &d, &kind) == 0 &&
+			    kind == G4M_EOL)
+				return 1;
+			r->bitpos = save;
 			return 0;
+		}
 		from = a0 < 0 ? 0 : a0;
 		b1 = (int32_t)next_change(ref, width, a0, colour, invert);
-		if (g4_match_mode(r, &d, &kind) < 0)
-			return -1;
-		if (kind == G4M_EOL) {
-			/* An end of block, or a line the producer broke up
-			 * with end of line marks, ends this row. */
+		if (g4_match_mode(r, &d, &kind) < 0) {
+			/* Bits that are in no table end the line the way the
+			 * reference ends one it cannot read: the rest of the
+			 * line keeps the colour it was in, and the next line
+			 * picks up after these bits.  The reference says
+			 * nothing here, because its seven bit main table has
+			 * an entry for every pattern and so it never runs
+			 * out of codes. */
+			g4_paint(row, from, (int32_t)width, colour, invert);
 			return 0;
+		}
+		if (kind == G4M_EOL) {
+			/* An end of block ends the strip, not just this
+			 * row, and the reference leaves the rows it never
+			 * reached at the all colour 0 line they start
+			 * from. */
+			return 1;
 		}
 		if (kind == G4M_EXT) {
 			/* The extension code ends the line: the reference
@@ -675,8 +705,13 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 			uint32_t r1, r2;
 
 			if (g4_read_run(r, colour, &r1) < 0 ||
-			    g4_read_run(r, colour ^ 1, &r2) < 0)
-				return -1;
+			    g4_read_run(r, colour ^ 1, &r2) < 0) {
+				/* Same as an unreadable mode word: the line
+				 * ends where the codes do. */
+				g4_paint(row, from, (int32_t)width, colour,
+				    invert);
+				return 0;
+			}
 			a1 = from + (int32_t)r1;
 			a2 = a1 + (int32_t)r2;
 			if (a1 < from)
@@ -738,24 +773,31 @@ g4_decode(const unsigned char *in, size_t inlen, uint32_t width, uint32_t rows,
 	*outlen = 0;
 	if (width == 0 || rows == 0)
 		return 0;
-	if ((px = calloc((size_t)width * rows, 1)) == NULL)
+	if ((px = malloc((size_t)width * rows)) == NULL)
 		return -1;
 	if ((imageline = malloc(width)) == NULL) {
 		free(px);
 		return -1;
 	}
 	/* The line above the first is the same all colour 0 line the encoder
-	 * assumes, so a stream this codec wrote decodes back to it. */
+	 * assumes, so a stream this codec wrote decodes back to it.  Rows a
+	 * stopped strip never reached keep that same colour. */
+	memset(px, (unsigned char)(invert ? 0xff : 0x00), (size_t)width * rows);
 	memset(imageline, (unsigned char)(invert ? 0xff : 0x00), width);
 
 	r.p = in;
 	r.len = inlen;
 	r.bitpos = 0;
 	for (y = 0; y < rows; y++) {
-		if (g4_decode_line(&r, px + (size_t)y * width,
+		int n;
+
+		n = g4_decode_line(&r, px + (size_t)y * width,
 		    y == 0 ? imageline : px + (size_t)(y - 1) * width, width,
-		    invert) < 0)
+		    invert);
+		if (n < 0)
 			goto fail;
+		if (n > 0)
+			break;
 		memcpy(imageline, px + (size_t)y * width, width);
 	}
 	if ((packed = g4_pack(px, width, rows)) == NULL)

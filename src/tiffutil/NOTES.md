@@ -818,7 +818,8 @@ The strip layout, on the other hand, is settled. It comes from the header
   484 bytes of every profile are still compared byte for byte. Masking the field
   without checking its value would have been easier and would have hidden exactly
   the bug above.
-- A third-party Group 4 stream using the extension code is not decoded.
+- The third-party Group 4 extension code is decoded; see "The 2D extension code"
+  below for what it does and for the fixtures that pin it.
 
 The reference tool segfaults on `-info`/`-verboseinfo` against a missing or
 non-TIFF input. Those cases are excluded from the harness rather than
@@ -902,10 +903,45 @@ Validation, all against `/usr/bin/tiffutil` as the oracle:
   default coefficients, four explicit sets, a multi-strip layout, several
   directories in one file, a flat-luma image, and both byte orders.
 
-Not characterised: a third-party strip using the G4 extension code (`0000001`)
-or explicit EOLs between rows. The mode table handles H, pass, V0-V+3 and
-EOFB, and a genuine EOL is the same twelve bits as an EOFB so a row still ends
-correctly; the extension code is rejected as an undecodable row.
+Not characterised: a third-party strip using explicit EOLs between rows. The
+mode table handles H, pass, V0-V+3 and EOFB, and a genuine EOL is the same
+twelve bits as an EOFB so a row still ends correctly.
+
+The G4 extension code is characterised and decoded (see "The 2D extension code"
+below).
+
+### The 2D extension code (settled by differential testing)
+
+`0000001` is the two-dimensional extension code. It has three properties that
+together make it unlike every other mode, and each one was checked against
+`/usr/bin/tiffutil` rather than inferred:
+
+* **It is exactly seven bits, not a prefix.** The first four bits `0001` are the
+  pass code, so a decoder that matches mode prefixes will never reach it. The
+  seven-bit pattern is recognised as a whole, before the prefix table is
+  consulted at all.
+* **It ends the row it is in.** The rest of the row is painted in the colour
+  current at that point, and decoding moves on to the next line. It does not
+  skip to the end of the strip, and it does not end the strip.
+* **The bits after it are read again.** Only the seven bits are consumed, so the
+  three bits that happen to follow are the start of the next mode. That is why
+  the code's effect on a multi-row image depends on whatever follows it, and
+  why the fixtures use a one-row image: the row the extension leaves behind is
+  then fixed by the code alone.
+
+The reference build's own decoder (`local/AKCmds-main/tiffutil` pins libtiff at
+`b6a17e5`) reaches the same decision through a lookup table rather than a
+special case. Its byte accumulator is filled from a bit-reversed byte table, so
+`0000001` arrives there as the value 64, and `TIFFFaxMainTable[64]` is
+`{S_Ext, 7, 0}`. Its `S_Ext` branch then appends the run from the current
+position to the end of the line and jumps to the row-end handler. The patches in
+that build do not touch the fax decoder, so the two routes agree by
+construction rather than by coincidence.
+
+A bad code word after an extension is worth separating from this: the reference
+logs it and ends that row, then carries on, where this decoder fails the
+conversion. The fixtures keep the bits after the extension unexamined so the
+comparison covers the code itself rather than that separate recovery path.
 
 ### G4 encoding algorithm, byte-exact (settled by differential testing)
 

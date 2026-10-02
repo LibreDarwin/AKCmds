@@ -522,6 +522,67 @@ s_packbits() { "$ORACLE" -packbits "$1/i.tiff" -out "$1/c.tiff" >/dev/null 2>&1;
 # A G4 source.  Asking for -none on a one bit gray image is what makes the
 # reference compress it, so the fixture is genuine facsimile data to decode.
 s_g4()   { "$ORACLE" -none     "$1/i.tiff" -out "$1/c.tiff" >/dev/null 2>&1; }
+# A G4 source whose row uses the 2D extension code 0000001.  The reference
+# never writes that code, so it goes in front of a strip the reference did
+# write, which is the only way to get third party facsimile data into the
+# comparison.  $1 is the directory and $2 the three bits that follow the code:
+# the code is seven bits long, so those three are read again as the start of
+# the next mode, and all eight of them are worth a fixture.
+#
+# The code ends the row it is in, so the image is a single row: whatever
+# follows the code is then never read, and each fixture pins the row the
+# extension leaves behind without depending on how the bits after it decode.
+g4ext() {
+    "$ORACLE" -none "$1/i.tiff" -out "$1/c.tiff" >/dev/null 2>&1 || return 1
+    python3 - "$1/c.tiff" "$2" <<'PYEOF' || return 1
+import struct, sys
+
+path, sel = sys.argv[1], sys.argv[2]
+d = bytearray(open(path, "rb").read())
+e = "<" if d[:2] == b"II" else ">"
+ifd = struct.unpack_from(e + "I", d, 4)[0]
+n = struct.unpack_from(e + "H", d, ifd)[0]
+
+strip = cnt = None
+for i in range(n):
+    tag, typ, count = struct.unpack_from(e + "HHI", d, ifd + 2 + i * 12)
+    if typ != 4 or count != 1:          # the strip tables have to be inline
+        continue
+    val = struct.unpack_from(e + "I", d, ifd + 2 + i * 12 + 8)[0]
+    if tag == 273:
+        strip = val
+    elif tag == 279:
+        cnt = val
+if strip is None or cnt is None:
+    sys.exit("no inline strip table")
+
+# 0000001 is not a prefix of any other mode, so it is written whole rather
+# than left to whichever code its first four bits spell.
+bits = "0000001" + sel
+size = (cnt * 8 + len(bits) + 7) // 8
+new = bytearray(size)
+new[:cnt] = d[strip:strip + cnt]
+for i, b in enumerate(bits):
+    if b == "1":
+        new[(cnt * 8 + i) // 8] |= 1 << (7 - ((cnt * 8 + i) & 7))
+
+# The strip is repointed at the copy appended here, so nothing that was
+# already in the file moves and every other tag stays as the reference wrote it.
+off = len(d)
+d += new
+for i in range(n):
+    p = ifd + 2 + i * 12
+    tag = struct.unpack_from(e + "H", d, p)[0]
+    if tag == 273:
+        struct.pack_into(e + "I", d, p + 8, off)
+    elif tag == 279:
+        struct.pack_into(e + "I", d, p + 8, size)
+open(path, "wb").write(bytes(d))
+PYEOF
+}
+for g4ext_sel in 000 001 010 011 100 101 110 111; do
+    eval "s_g4ext_$g4ext_sel() { g4ext \"\$1\" $g4ext_sel; }"
+done
 s_pred() {
     "$ORACLE" -lzw -out /dev/null "$1/i.tiff" >/dev/null 2>&1
     :
@@ -1046,6 +1107,17 @@ for op in -info -verboseinfo; do
     check "g4src $op" little "$B1G" s_g4 -- "$op" c.tiff
 done
 check "g4src -dump"        little "$B1G"  s_g4 -- -dump c.tiff
+# The 2D extension code.  One row per fixture, because the code ends the row
+# and a second row would make the three bits after it decide the result.
+for g4ext_sel in 000 001 010 011 100 101 110 111; do
+    check "g4ext $g4ext_sel -none" little "16,1,1,1,1" \
+        "s_g4ext_$g4ext_sel" -- -none c.tiff -out o.tiff
+    check "g4ext $g4ext_sel -info" little "16,1,1,1,1" \
+        "s_g4ext_$g4ext_sel" -- -info c.tiff
+done
+check "g4ext BE -none" big "16,1,1,1,1" s_g4ext_000 -- -none c.tiff -out o.tiff
+check "g4ext -none"      little "32,1,1,1,1" s_g4ext_011 -- -none c.tiff -out o.tiff
+check "g4ext 64 -none"   little "64,1,1,1,1" s_g4ext_101 -- -none c.tiff -out o.tiff
 # An unnamed field draws a warning on stderr, but only where the directory is
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks
 # the raw IFD itself and says nothing, and neither does a conversion.

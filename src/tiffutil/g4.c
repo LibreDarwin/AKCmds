@@ -130,6 +130,10 @@ static const struct code vert[7] = {
 #define G4_PASS   "0001"
 /* End of facsimile blocks: the reference closes the stream with two of them. */
 #define G4_EOFB   "000000000001"
+/* 2D extension code, 0000001.  Seven bits, and the bits after it are codes
+ * again, so it cannot be matched as a prefix. */
+#define G4_EXT_LEN 7
+#define G4_EXT_BITS 0x01u
 
 struct bitbuf {
 	unsigned char *p;
@@ -411,7 +415,8 @@ enum g4_mode {
 	G4M_VERT,
 	G4M_HORIZ,
 	G4M_PASS,
-	G4M_EOL
+	G4M_EOL,
+	G4M_EXT
 };
 
 struct modeent {
@@ -499,15 +504,35 @@ g4_build_tables(void)
 
 /* The mode and run tables are prefix free, so the shortest code that matches
  * the bits so far is the only one that can.  Reading a bit at a time and
- * retesting at each length is enough to find it. */
+ * retesting at each length is enough to find it.
+ *
+ * The 2D extension code is the exception: 0000001 is not a prefix code, since
+ * its first four bits are the pass code 0001, so a prefix scan can never
+ * reach it.  The reference resolves it with a fixed seven bit look ahead, and
+ * then reads the bits after the code again as the next mode, so look for the
+ * whole seven bit code before scanning for a prefix. */
 static int
 g4_match_mode(struct bitreader *r, int32_t *d, int *kind)
 {
 	uint32_t acc = 0;
 	uint32_t n;
+	size_t save = r->bitpos;
 	size_t i;
 
 	g4_build_tables();
+
+	for (n = 1; n <= G4_EXT_LEN; n++) {
+		acc = (acc << 1) | (uint32_t)br_bit(r);
+		r->bitpos++;
+		if (n == G4_EXT_LEN && acc == G4_EXT_BITS) {
+			*d = 0;
+			*kind = G4M_EXT;
+			return 0;
+		}
+	}
+	r->bitpos = save;
+	acc = 0;
+
 	for (n = 1; n <= 12; n++) {
 		acc = (acc << 1) | (uint32_t)br_bit(r);
 		r->bitpos++;
@@ -614,6 +639,14 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		if (kind == G4M_EOL) {
 			/* An end of block, or a line the producer broke up
 			 * with end of line marks, ends this row. */
+			return 0;
+		}
+		if (kind == G4M_EXT) {
+			/* The extension code ends the line: the reference
+			 * gives the rest of it the colour it was in and
+			 * stops, without reading the uncompressed data it
+			 * stands for. */
+			g4_paint(row, from, (int32_t)width, colour, invert);
 			return 0;
 		}
 		if (kind == G4M_PASS) {

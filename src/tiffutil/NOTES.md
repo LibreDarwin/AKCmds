@@ -330,8 +330,71 @@ which is the same word the top-left and bottom-left names already used.
 The complaint comes *after* every unknown-field warning the same directory
 drew, not among them, one per offending field and in the order the entries sit
 in, and `-dump` prints neither the line nor the complaint. Four more tags
-refuse values but refuse harder, failing the file open; their measured ranges
-are in the open list below.
+refuse values but refuse harder, taking the whole report with them; they are
+described under "A refused value can take the whole report with it" below.
+
+### A refused value can take the whole report with it
+
+The other half of the family refuses so hard that no directory is reported at
+all. These four, and only these, print a warning followed by this:
+
+    _TIFFVSetField: F: Bad value 0 for "SampleFormat" tag.
+    Error: Can't open F. Either it isn't readable, it isn't a TIFF file, or
+    there are unrecognized tags; try tiffutil -dump for more info.
+
+    tag     accepted   refused
+    338 ExtraSamples   0-2     a list; any element outside 0-2 refuses
+    339 SampleFormat   1-6
+    32996 DataType     0-3
+    32998 TileDepth    1-65535 only 0 is refused
+
+The walk stops at the *first* refusal in a directory, so with both 32996 and
+339 out of range only the one the entries reach first is named. The two lines
+come after that directory's unknown-field warnings, as with the softer family.
+Nothing reaches stdout -- not even the directory heading, and not the lines for
+directories before this one. `-dump` and the write operations read the same
+files without complaint, so the refusal is confined to `-info`/`-verboseinfo`.
+
+**ExtraSamples names the count, not the element.** It is a list, so it is
+refused when any element is out of range, but the number in the complaint is the
+number of elements: a one-element list holding 3 refuses naming `1`, and a
+two-element `[3, 0]` refuses naming `2` even though 3 is the element that was
+wrong. Measured against one- and two-sample-per-pixel images; the three- and
+four-sample fixtures this would need died on something else before the
+complaint, so nothing is claimed for those.
+
+After the two lines the reference tool dereferences the null image source left
+by the failed open and dies of SIGSEGV -- rc 139, observed as signal 11. Like
+the four unreadable inputs below, that is a crash and not a parity target, so
+this port prints the same two lines and stops with a non-zero status. The
+harness compares both streams and all the bytes for these cases and leaves only
+the exit status out (`check_nostatus`).
+
+**DataType wins over SampleFormat, and names the middle two the other way
+round.** A directory carrying both 339 and 32996 is named from 32996, because
+it is set second; DataType's enumeration is SampleFormat's with 1 and 2
+exchanged:
+
+    value    SampleFormat        DataType
+    0        refused             void
+    1        unsigned integer    signed integer
+    2        signed integer      unsigned integer
+    3        IEEE floating point IEEE floating point
+    4        void                refused
+    5,6      5 (0x5), 6 (0x6)    refused
+
+An accepted value with no name of its own is printed as the number and its
+hex (`5 (0x5)`), not as `unknown`. Note that SampleFormat is not ignored: the
+reference tool injects `SampleFormat(339)=1` when the input omits it.
+
+**`-dump` names all four Silicon Graphics extensions with their vendor**, and
+marks the first two obsolete on top of that -- including the reference tool's
+own spelling of the first, which is `Matteing` and not `Matting`:
+
+    32995 OBSOLETE Matteing (Silicon Graphics)
+    32996 OBSOLETE DataType (Silicon Graphics)
+    32997 ImageDepth (Silicon Graphics)
+    32998 TileDepth (Silicon Graphics)
 
 ## The argument grammar is positional, not a flag soup
 
@@ -391,23 +454,6 @@ Known gaps, as reported by that harness and not yet fixed:
   retired rather than quietly dropped.
 
 Still open, and therefore *not* pinned down by anything in this file:
-
-- Four tags still refuse values the harder way, failing the file open rather
-  than losing one line. Measured accepted ranges, from sweeping values 0-16
-  through `-info`:
-
-      338 ExtraSamples  0-2     339 SampleFormat   1-6
-      32996 DataType    0-3     32998 TileDepth    1-16+  (bound not searched)
-
-  A bad value for any of them prints the warning and then `Error: Can't open F.
-  Either it isn't readable, it isn't a TIFF file, or there are unrecognized
-  tags; try tiffutil -dump for more info.`, and reports no directory at all.
-  Two measured details come with them: SampleFormat 3 is `IEEE floating point`
-  against `floating point`, 4 is `void` against `undefined`, and an unnamed
-  accepted value like 5 is printed as `5 (0x5)` rather than as `unknown`; and
-  DataType (32996) makes the reference tool print a whole Sample Format line
-  from a tag that is otherwise ignored here. None of it is pinned by the
-  harness today.
 
 - A tag listed twice in one directory is refused by the entry-order check, and
   the reference tool says so before anything else:

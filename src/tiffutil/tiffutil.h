@@ -169,6 +169,8 @@ int tu_cmd_dump(const char *path);
 #define TAG_YCBCRCOEFFICIENT 529
 #define TAG_YCBCRSUBSAMPLING 530
 #define TAG_REFERENCEBLACKWHITE 532
+#define TAG_DATATYPE        32996
+#define TAG_TILEDEPTH       32998
 #define TAG_RESOLUTIONUNIT  296
 #define TAG_SOFTWARE        305
 #define TAG_SAMPLEFORMAT    339

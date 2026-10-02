@@ -277,6 +277,8 @@ PYEOF
 #   setup  : function run with the case directory as $1 to add further files
 #            (a compressed source, a bad source, ...; default s_none)
 # The arguments after -- are handed to both tools, run inside the case dir.
+# Set SKIP_STATUS in the environment to leave the exit status out of the
+# comparison; see check_nostatus below for when that is the right thing.
 check() {
     local label="$1" endian="$2" pages="$3" setup="$4"
     shift 4
@@ -308,7 +310,9 @@ check() {
         mv "$m/e2" "$m/o.err"
 
     local why=""
-    [ "$ro" = "$rm" ] || why="exit($ro/$rm)"
+    if [ -z "$SKIP_STATUS" ] && [ "$ro" != "$rm" ]; then
+        why="exit($ro/$rm)"
+    fi
     cmp -s "$o/o.out" "$m/o.out" || why="$why stdout"
     cmp -s "$o/o.err" "$m/o.err" || why="$why stderr"
 
@@ -337,6 +341,15 @@ check() {
         printf '       oracle stderr: %s\n' "$(head -1 "$o/o.err")"
         printf '       ours   stderr: %s\n' "$(head -1 "$m/o.err")"
     fi
+}
+
+# check, without the exit status in the comparison.  The reference tool dies of
+# SIGSEGV (rc 139) on some inputs, and a clean implementation that reports the
+# same messages and then stops cannot match that.  Everything else -- both
+# streams byte for byte, the files present, the fixture bytes -- still is
+# compared, which is more than the excluded cases below get.
+check_nostatus() {
+    SKIP_STATUS=1 check "$@"
 }
 
 # Extra fixtures.  Each takes the case directory as $1.
@@ -474,6 +487,42 @@ s_or_hi()    { mkextra "$1/i.tiff" little 274=65535; }
 # to pin that they follow the order the entries sit in.
 s_ref_all()  { mkextra "$1/i.tiff" little 266=0,274=0,296=0; }
 s_ref_unk()  { mkextra "$1/i.tiff" little 266=0,274=0,296=0,347=1; }
+
+# The other four of the family refuse harder: the whole report is lost, not
+# just the one line, and the tool stops on "Can't open" having said nothing
+# else.  The reference tool then dies on a null image source, so these use
+# check_nostatus; -dump and the write operations survive them and are compared
+# normally.  SampleFormat numbers one to six and DataType zero to three;
+# ExtraSamples is a list of zero to two and names the element count, not the
+# element, when one of them is out of range.
+s_sf_zero()  { mkextra "$1/i.tiff" little 339=0; }
+s_sf_seven() { mkextra "$1/i.tiff" little 339=7; }
+s_sf_hi()    { mkextra "$1/i.tiff" little 339=65535; }
+s_dt_four()  { mkextra "$1/i.tiff" little 32996=4; }
+s_dt_hi()    { mkextra "$1/i.tiff" little 32996=65535; }
+s_td_zero()  { mkextra "$1/i.tiff" little 32998=0; }
+s_td_big()   { mkextra "$1/i.tiff" big 32998=0; }
+s_xs_three() { mkextra "$1/i.tiff" little 338=3; }
+s_xs_hi()    { mkextra "$1/i.tiff" little 338=65535; }
+# DataType is set second, so where a directory carries both it is the one named.
+s_sf_dt()    { mkextra "$1/i.tiff" little 339=1,32996=3; }
+s_dt_sf()    { mkextra "$1/i.tiff" little 32996=2,339=3; }
+# The refusals come after the unknown-field warnings, and only the first one in
+# a directory is named before the walk stops.
+s_ref_unk2() { mkextra "$1/i.tiff" little 339=0,347=1,65000=1; }
+s_ref_two()  { mkextra "$1/i.tiff" little 32996=4,339=0,298=7; }
+for i in 0 1 2 3 4 5 6; do
+    eval "s_sf_$i() { mkextra \"\$1/i.tiff\" little 339=$i; }"
+done
+for i in 0 1 2 3; do
+    eval "s_dt_$i() { mkextra \"\$1/i.tiff\" little 32996=$i; }"
+done
+for i in 0 1 2; do
+    eval "s_xs_$i() { mkextra \"\$1/i.tiff\" little 338=$i; }"
+done
+for i in 1 2 8 65535; do
+    eval "s_td_$i() { mkextra \"\$1/i.tiff\" little 32998=$i; }"
+done
 
 # Single-page shapes.  w,h,bps,spp,photo.
 G8="16,16,8,1,1"          # 8-bit gray
@@ -685,6 +734,32 @@ for op in -info -verboseinfo; do
     # Every refusal in one directory, alone and behind an unnamed field.
     check "refused all $op"  little "$G8W" s_ref_all -- "$op" i.tiff
     check "refused all + unknown $op" little "$G8W" s_ref_unk -- "$op" i.tiff
+    # The four that take the report with them.  Every value in range is named
+    # and reported normally; out of range says so and stops.
+    for setup in s_sf_1 s_sf_2 s_sf_3 s_sf_4 s_sf_5 s_sf_6 \
+                 s_dt_0 s_dt_1 s_dt_2 s_dt_3 s_xs_0 s_xs_1 s_xs_2 \
+                 s_td_1 s_td_2 s_td_8 s_td_65535; do
+        check "$setup $op" little "$G8W" "$setup" -- "$op" i.tiff
+    done
+    for setup in s_sf_zero s_sf_seven s_sf_hi s_dt_four s_dt_hi \
+                 s_td_zero s_xs_three s_xs_hi; do
+        check_nostatus "$setup $op" little "$G8W" "$setup" -- "$op" i.tiff
+    done
+    check_nostatus "tiledepth zero BE $op" big "$G8W" s_td_big -- "$op" i.tiff
+    check "sampleformat big-endian $op" big "$G8W" s_sf_3 -- "$op" i.tiff
+    check "sampleformat both $op" little "$G8W" s_sf_dt -- "$op" i.tiff
+    check "datatype both $op"    little "$G8W" s_dt_sf -- "$op" i.tiff
+    check_nostatus "refused + unknown $op" little "$G8W" s_ref_unk2 -- "$op" i.tiff
+    check_nostatus "two refused $op"      little "$G8W" s_ref_two  -- "$op" i.tiff
+done
+# -dump names the Silicon Graphics extensions, and reads the same files the
+# report refuses.
+for setup in s_dt_4 s_sf_1 s_xs_1 s_td_8; do
+    check "$setup dump" little "$G8W" "$setup" -- -dump i.tiff
+done
+for setup in s_sf_zero s_dt_four s_td_zero s_xs_three; do
+    check "$setup dump refused" little "$G8W" "$setup" -- -dump i.tiff
+    check "$setup write refused" little "$G8W" "$setup" -- -none -out o.tiff i.tiff
 done
 check "g4src -extract 0"   little "$B1G"  s_g4 -- -extract 0 c.tiff -out o.tiff
 check "g4src -extract end" little "$MULTI" s_g4 -- -extract 3 c.tiff -out o.tiff

@@ -109,6 +109,13 @@ dump_tag_name(uint16_t tag)
 	/* JPEGTables is named here and yet still drawn as an unknown field by
 	 * -info: the two go through different vocabularies. */
 	case 347:                 return "JPEGTables";
+	/* The Silicon Graphics extensions name their vendor, and the first
+	 * two are drawn as obsolete on top of that.  "Matteing" is the
+	 * reference tool's own spelling and is kept as it is found. */
+	case 32995:               return "OBSOLETE Matteing (Silicon Graphics)";
+	case 32996:               return "OBSOLETE DataType (Silicon Graphics)";
+	case 32997:               return "ImageDepth (Silicon Graphics)";
+	case 32998:               return "TileDepth (Silicon Graphics)";
 	default:                  return NULL;
 	}
 }
@@ -179,9 +186,26 @@ sampleformat_phrase(uint32_t s)
 	switch (s) {
 	case 1: return "unsigned integer";
 	case 2: return "signed integer";
-	case 3: return "floating point";
-	case 4: return "undefined";
-	default: return "unknown";
+	case 3: return "IEEE floating point";
+	case 4: return "void";
+	default: return NULL;
+	}
+}
+
+/*
+ * DataType (32996) is the same enumeration as SampleFormat with the middle two
+ * the other way round, and where a directory carries both it is DataType that
+ * is named -- not because it wins an argument, but because it is set second.
+ */
+static const char *
+datatype_phrase(uint32_t s)
+{
+	switch (s) {
+	case 0: return "void";
+	case 1: return "signed integer";
+	case 2: return "unsigned integer";
+	case 3: return "IEEE floating point";
+	default: return NULL;
 	}
 }
 
@@ -282,9 +306,8 @@ tu_cmd_info(const char *path, int verbose)
 		 * later and separate complaint: still on stderr, but after
 		 * every unknown-field warning the directory drew, one per
 		 * offending field, and in the order the entries sit in.  The
-		 * three tags here lose only the line; the rest of the family
-		 * refuses harder, failing the whole file open, and is written
-		 * down in NOTES.md rather than guessed at. */
+		 * three tags here lose only the line; the four after them refuse
+		 * harder, taking the whole report with it. */
 		for (uint32_t i = 0; i < t.ndirs[d]; i++) {
 			uint16_t tag = t.ents[d][i].tag;
 			const char *name;
@@ -311,6 +334,73 @@ tu_cmd_info(const char *path, int verbose)
 			    (val == 0 || val > hi))
 				tu_warn("_TIFFVSetField: %s: Bad value %u for"
 				    " \"%s\" tag.\n", path, val, name);
+		}
+		for (uint32_t i = 0; i < t.ndirs[d]; i++) {
+			uint16_t tag = t.ents[d][i].tag;
+			const char *name;
+			uint32_t lo, hi, val = 0;
+			int refused;
+
+			switch (tag) {
+			case TAG_EXTRASAMPLES:
+				name = "ExtraSamples";
+				lo = 0;
+				hi = 2;
+				break;
+			case TAG_SAMPLEFORMAT:
+				name = "SampleFormat";
+				lo = 1;
+				hi = 6;
+				break;
+			case TAG_DATATYPE:
+				name = "DataType";
+				lo = 0;
+				hi = 3;
+				break;
+			case TAG_TILEDEPTH:
+				name = "TileDepth";
+				lo = 1;
+				hi = 0xffff;
+				break;
+			default:
+				continue;
+			}
+			/* ExtraSamples is a list, so it is refused when any
+			 * element is out of range -- but what it names as the
+			 * bad value is the number of elements, not the element
+			 * that was wrong. */
+			if (tag == TAG_EXTRASAMPLES) {
+				int xtype = 0;
+				uint32_t xcount = 0, k;
+				unsigned char *raw;
+
+				raw = tu_tag_raw(&t, d, tag, &xtype, &xcount);
+				refused = 0;
+				for (k = 0; raw != NULL && k < xcount; k++)
+					if (rd_be16(raw + 2 * k, t.be) > hi)
+						refused = 1;
+				val = xcount;
+			} else {
+				refused = tu_get_uint(&t, d, tag, &val) == 0 &&
+				    (val < lo || val > hi);
+			}
+			if (!refused)
+				continue;
+			/* Unlike the three above, this one takes the whole
+			 * report with it: the two lines below are the last
+			 * thing the reference tool prints before it dies on a
+			 * null image source.  Only the first refusal in the
+			 * directory is reported, and the unknown-field
+			 * warnings for that directory have already gone out,
+			 * so the report stops here rather than continuing. */
+			tu_warn("_TIFFVSetField: %s: Bad value %u for"
+			    " \"%s\" tag.\n", path, val, name);
+			tu_warn("Error: Can't open %s. Either it isn't"
+			    " readable, it isn't a TIFF file, or there are"
+			    " unrecognized tags; try tiffutil -dump for"
+			    " more info.\n", path);
+			tiff_close(&t);
+			return -1;
 		}
 		{
 			uint32_t cspp = 0, ctype = 0;
@@ -385,9 +475,23 @@ tu_cmd_info(const char *path, int verbose)
 			    : v == 2 ? "pixels/inch" : "pixels/cm");
 		if (tu_get_uint(&t, d, TAG_BITSPERSAMPLE, &bps) == 0)
 			printf("  Bits/Sample: %u\n", bps);
-		if (tu_has_tag(&t, d, TAG_SAMPLEFORMAT)) {
+		if (tu_get_uint(&t, d, TAG_DATATYPE, &v) == 0) {
+			const char *sf;
+
+			sf = datatype_phrase(v);
+			if (sf != NULL)
+				printf("  Sample Format: %s\n", sf);
+			else
+				printf("  Sample Format: %u (0x%x)\n", v, v);
+		} else if (tu_has_tag(&t, d, TAG_SAMPLEFORMAT)) {
+			const char *sf;
+
 			tu_get_uint(&t, d, TAG_SAMPLEFORMAT, &v);
-			printf("  Sample Format: %s\n", sampleformat_phrase(v));
+			sf = sampleformat_phrase(v);
+			if (sf != NULL)
+				printf("  Sample Format: %s\n", sf);
+			else
+				printf("  Sample Format: %u (0x%x)\n", v, v);
 		}
 		if (tu_get_uint(&t, d, TAG_COMPRESSION, &v) == 0)
 			printf("  Compression Scheme: %s\n", tu_compression_name(v));

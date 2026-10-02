@@ -503,16 +503,18 @@ notimpl:
 		ycbcr_to_rgb(&raw, &rawlen, w, h, kc[0], kc[1], kc[2]);
 	}
 
-	/* LogLuv is not decoded here, and nothing below is a measurement of what
-	 * the reference tool does with it.  The reference hands the file to
-	 * ImageIO and lets ImageIO decode it, so there is no arithmetic in it to
-	 * port and the numbers have to come from the reference tool's output
-	 * alone.  Nothing can be pinned until a LogLuv file can be built at all,
-	 * and one cannot be built by hand: the codec reads its own bit stream, so
-	 * samples laid out in any byte order we can write decode to noise.  The
-	 * harness has no LogLuv file for the same reason.  Until it does, read the
-	 * white below as a placeholder rather than as the reference tool's
-	 * behaviour. */
+	/* LogLuv is not decoded here.  A fixture can be built now, though -- the
+	 * strip is the 32-bit word S:1 Le:15 ue:8 ve:8 with those four bytes
+	 * separated into per-row bit planes and run-length encoded, and such a
+	 * file round-trips through the reference tool with its pixels aligned.
+	 * So what is missing is the arithmetic, not a way in; see NOTES.md.
+	 *
+	 * It is worth being exact about why the fill below is wrong rather than
+	 * merely unmeasured: the reference tool answers a LogLuv file with a
+	 * 32-bit IEEE float TIFF, BitsPerSample 32,32,32 and SampleFormat 3,
+	 * holding linear light around 1e-9.  Eight-bit white is not a rough
+	 * version of that answer, it is a different output type, so nothing here
+	 * should be read as the reference tool's behaviour. */
 	if (photo == 32845 && bps == 8 && rawlen > 0)
 		memset(raw, 0xff, rawlen);
 

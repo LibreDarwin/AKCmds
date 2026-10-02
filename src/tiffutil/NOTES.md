@@ -554,57 +554,80 @@ compare everything but the output bytes (`check_nobytes ./o.tiff`).
 
 Still open, and therefore *not* pinned down by anything in this file:
 
-- LogLuv is not decoded, and the way in is blocked on the fixture rather than on
-  the arithmetic. The reference tool hands the file to ImageIO and lets ImageIO
-  decode it -- `local/AKCmds-main/tiffutil/tiffutil.m` opens a
+- LogLuv is not decoded. The way in is open -- a fixture can be written by
+  hand, and one has been -- so what blocks this is the arithmetic on the far
+  side of the decoder. The reference tool hands the file to ImageIO and lets
+  ImageIO decode it: `local/AKCmds-main/tiffutil/tiffutil.m` opens a
   `CGImageSource` and adds frames to a `CGImageDestination` without touching a
   pixel itself, and the libtiff it bootstraps with `-Dlogluv=ON` is there to
   serve `TIFFPrintDirectory`, not the conversion. So there is no C in the
   reference to port and nothing to read the numbers off but its output.
 
-  The one thing settled by probing: the codec only engages at compression
-  34676. A file claiming photometric 32845 at compression 1 with a uniform
-  16-bit depth comes back as a plain narrowing of each 16-bit sample -- an
-  all-`0x80` buffer becomes 128,128,128, which is a byte copy and not a
-  conversion -- whereas the same buffer at compression 34676 comes back
-  black.
+  Retracted below: two claims that were once taken for granted here were read
+  out of the reference tool's output by a probe that was reading 3 bytes a
+  pixel out of an answer that carries 12. Every pixel it compared was three
+  bytes out of phase. That probe is what produced both the "compression 1
+  narrows the samples" reading and the "this layout decodes to noise" reading,
+  and neither is evidence. Both have to be measured again before they are
+  written down as fact.
 
-  Past that, hand-written samples decode to noise, and the reason is worth
-  having written down: the strip is not samples at all. It is a run-length
-  string per bit plane, so a row begins with a control byte and every layout
-  that writes samples directly lands somewhere the decoder never looks. That
-  is the signature seen here -- `[A,A]` and `[A,B]` agree everywhere, and two
-  identical input pixels give two different output pixels, in the 4-byte and
-  the 6-byte layout alike. The encoding, from `tif_luv.c`:
+The strip layout, on the other hand, is settled. It comes from the header
+  comment in `tif_luv.c`, and a 16-bit LogLuv pixel is one 32-bit word:
 
-      for each bit plane, high byte then low byte
+      1       15           8        8
+      |-+---------------|--------+--------|
+      S       Le           ue       ve
+
+  Those four bytes are separated into per-row bit planes and run-length
+  encoded, high byte first:
+
+      for each of the 4 byte planes, high byte then low byte
         control byte >= 128   a run of (control - 126) pixels, then the value
         control byte 1..127   that many literal bytes follow
         control byte 0        nothing
       runs only pay off from 4 pixels up
 
-  The arithmetic on the far side of that is settled and portable, and worth
-  recording so it need not be measured again:
+  Confirmed by alignment, which is the only test that can settle a layout. If
+  the strip is understood then `[A,B]` must decode to `f(A), f(B)`, and must
+  agree with `[A,A]` on its first pixel and with `[B,B]` on its second. It
+  does, exactly:
+
+      [A,B] -> 928801103, 905323085, 941186262 | 2961410514, 828267634, 822561048
+      [A,A] -> 928801103, 905323085, 941186262 | 928801103, 905323085, 941186262
+      [B,B] -> 2961410514, 828267634, 822561048| 2961410514, 828267634, 822561048
+
+  So a fixture can be written by hand after all, and libtiff does not need to
+  be asked for one. What is now missing is the arithmetic on the far side, and
+  the first measurement of that has already overturned an assumption:
+
+      BitsPerSample 32,32,32   SampleFormat 3,3,3   Photometric 2   Compression 1
+      strip -> (-9.570675e-10, 3.235780e-09, 1.968663e-09)
+
+  The reference tool answers a LogLuv file with a 32-bit IEEE float TIFF
+  holding linear light on the order of 1e-9, not with 8-bit sRGB. That is the
+  right order of magnitude for `Y = 2^((Le + 0.5)/256 - 64)`, which comes to
+  2.1e-9 at `Le = 9000`. It follows that the white fill in `main.c` is not an
+  unmeasured approximation of the right answer but the wrong output type
+  altogether, and that matching this path means emitting a float TIFF, which
+  the writer cannot currently do.
+
+  Settled already, and worth not measuring twice:
 
       Y = 2^((Le + 0.5)/256 - 64), Le = L & 0x7fff, sign in bit 15
-      r =  2.690 X - 1.276 Y - 0.414 Z      each clamped to 0..255 by
-      g = -1.022 X + 1.978 Y + 0.044 Z      (int)(256 * sqrt(c)) for c in
-      b =  0.061 X - 0.224 Y + 1.163 Z      (0,1), else 0 or 255
+      r =  2.690 X - 1.276 Y - 0.414 Z      CCIR-709 primaries, plain 2.0
+      g = -1.022 X + 1.978 Y + 0.044 Z      gamma, no colour management
+      b =  0.061 X - 0.224 Y + 1.163 Z
 
-  -- CCIR-709 primaries and a plain 2.0 gamma, no colour management anywhere.
+  (The `(int)(256 * sqrt(c))` quantisation and 0..255 clamp that libtiff's
+  `XYZtoRGB24` applies belong to its 8-bit path, which is not the path in
+  evidence here.)
 
-  What is not settled is the layout, and libtiff's own answer is the wrong
-  shape to copy: its `SGILOGDATAFORMAT_16BIT` is 2 bytes a pixel, luminance
-  only, whereas the reference tool emits three samples and refuses a one-sample
-  file outright. So the two do not agree, and building a fixture by porting
-  libtiff's encoder would encode the wrong thing.
-
-  The way out is a fixture written by something that already knows the format.
-  libtiff built with `logluv=ON` can write LogLuv, and the reference's own
-  `bootstrap-libtiff.sh` builds exactly that -- which is the next step, and it
-  is a clone and a build rather than a measurement. The harness has no LogLuv
-  file, and the white fill in `main.c` is a placeholder rather than a
-  measurement, until one exists.
+  Still open, and the whole of what remains: how `ue` and `ve` become u' and
+  v'. Scaling them across the usual u' range of -0.5..0.62 and v' of -0.5..0.5
+  drives `y` negative for the probe chroma, so the range in use is not that
+  one; and whether the float samples are XYZ or RGB is not yet settled
+  either. The harness still has no LogLuv file, and `main.c` still does not
+  decode any.
 - 8-bit YCbCr Photometric 6 is converted too, and is now reproduced; see the
   YCbCr note above for the model and for the residuals it leaves.
 - The Lab profile carries a build timestamp, so a byte comparison only holds

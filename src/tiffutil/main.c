@@ -503,11 +503,16 @@ notimpl:
 		ycbcr_to_rgb(&raw, &rawlen, w, h, kc[0], kc[1], kc[2]);
 	}
 
-	/* LogLuv is the one photometric the reference tool lays down as
-	 * something other than the samples it read.  At eight bits a sample it
-	 * will not decode, and rather than guess it fills the image with white;
-	 * at sixteen bits it runs a real conversion, which is not reproduced
-	 * here, so those samples pass through. */
+	/* LogLuv is not decoded here, and nothing below is a measurement of what
+	 * the reference tool does with it.  The reference hands the file to
+	 * ImageIO and lets ImageIO decode it, so there is no arithmetic in it to
+	 * port and the numbers have to come from the reference tool's output
+	 * alone.  Nothing can be pinned until a LogLuv file can be built at all,
+	 * and one cannot be built by hand: the codec reads its own bit stream, so
+	 * samples laid out in any byte order we can write decode to noise.  The
+	 * harness has no LogLuv file for the same reason.  Until it does, read the
+	 * white below as a placeholder rather than as the reference tool's
+	 * behaviour. */
 	if (photo == 32845 && bps == 8 && rawlen > 0)
 		memset(raw, 0xff, rawlen);
 

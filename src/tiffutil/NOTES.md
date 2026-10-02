@@ -554,9 +554,34 @@ compare everything but the output bytes (`check_nobytes ./o.tiff`).
 
 Still open, and therefore *not* pinned down by anything in this file:
 
-- 16-bit LogLuv is converted rather than copied, and its conversion is still
-  unknown. 8-bit YCbCr Photometric 6 is converted too, and is now reproduced;
-  see the YCbCr note above for the model and for the residuals it leaves.
+- LogLuv is not decoded, and the way in is blocked on the fixture rather than on
+  the arithmetic. The reference tool hands the file to ImageIO and lets ImageIO
+  decode it -- `local/AKCmds-main/tiffutil/tiffutil.m` opens a
+  `CGImageSource` and adds frames to a `CGImageDestination` without touching a
+  pixel itself, and the libtiff it bootstraps with `-Dlogluv=ON` is there to
+  serve `TIFFPrintDirectory`, not the conversion. So there is no C in the
+  reference to port and nothing to read the numbers off but its output.
+
+  The one thing settled by probing: the codec only engages at compression
+  34676. A file claiming photometric 32845 at compression 1 with a uniform
+  16-bit depth comes back as a plain narrowing of each 16-bit sample -- an
+  all-`0x80` buffer becomes 128,128,128, which is a byte copy and not a
+  conversion -- whereas the same buffer at compression 34676 comes back
+  black.
+
+  Past that, hand-written samples decode to noise and no alignment can be
+  established: `[A,A]` and `[A,B]` agree on their first pixel and differ on
+  nothing, and two identical input pixels produce two different output pixels,
+  in both the 4-byte and the 6-byte layout. That is the signature of a decoder
+  consuming a bit stream rather than bytes, so the layout is whatever an SGILOG
+  encoder emits and no arrangement of bytes reaches it. Building a fixture needs
+  that encoder, which neither the reference nor this port has; the harness has
+  no LogLuv file, and the white fill in `main.c` is a placeholder rather than a
+  measurement. Getting an encoder first -- libtiff built with `logluv=ON` can
+  write the format -- is the next step, and the conversion can then be measured
+  off the reference tool as usual.
+- 8-bit YCbCr Photometric 6 is converted too, and is now reproduced; see the
+  YCbCr note above for the model and for the residuals it leaves.
 - The Lab profile carries a build timestamp, so a byte comparison only holds
   within a single second. Anything comparing Lab output needs synchronised
   clocks or a deterministic time injection.

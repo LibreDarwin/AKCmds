@@ -131,6 +131,10 @@ typedef struct {
 	                               * surplus channels were dropped */
 	uint32_t srcbps;             /* depth the file itself carried, before
 	                               * narrow samples were widened to a byte */
+	int floatout;                /* the samples are IEEE float, which only
+	                               * the LogLuv path produces; the writer has
+	                               * to tag them as such and attach a
+	                               * different ICC profile for them */
 	int unusable;                /* the reference tool cannot turn this into
 	                               * an image at all, and writes nothing */
 	int unopenable;              /* the photometric means nothing to it, so
@@ -204,5 +208,8 @@ int tu_cmd_dump(const char *path);
 #define COMP_G4        4
 #define COMP_LZW       5
 #define COMP_PACKBITS  32773
+
+/* Compression schemes tiffutil only reads. */
+#define COMP_SGILOG    34676
 
 #endif

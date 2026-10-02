@@ -142,6 +142,16 @@ fail:
 	return -1;
 }
 
+/* One PackBits run: 257 - n, then the repeated byte.  Runs are written for two
+ * identical bytes as well as three, which is what libtiff does and what makes
+ * a literal, a two byte run and a literal come back out as one literal again. */
+static int
+emit_run(buf_t *b, size_t n, int byte)
+{
+	return buf_u8(b, (unsigned)(257 - n)) < 0 ||
+	    buf_u8(b, (unsigned)byte) < 0 ? -1 : 0;
+}
+
 int
 packbits_encode(const unsigned char *in, size_t inlen, size_t rowbytes,
     unsigned char **out, size_t *outlen)
@@ -153,39 +163,100 @@ packbits_encode(const unsigned char *in, size_t inlen, size_t rowbytes,
 		rowbytes = inlen;
 	while (i < inlen) {
 		/* Each row is encoded on its own, so neither a run nor a block of
-		 * literals is allowed to cross a row edge. The edge is taken from
-		 * the row grid, not from i, or a run partway through a row would
-		 * slide the boundary along with it. */
+		 * literals is allowed to cross a row edge: libtiff restarts the
+		 * state machine for every row.  The edge is taken from the row
+		 * grid, not from i, or a run partway through a row would slide
+		 * the boundary along with it. */
 		size_t rowend = (i / rowbytes + 1) * rowbytes;
-		size_t run = 1;
+		enum { BASE, LITERAL, RUN, LITERAL_RUN } state;
+		size_t litpos = 0, n;
+		int byte;
 
 		if (rowend > inlen)
 			rowend = inlen;
-		while (i + run < rowend && in[i + run] == in[i] && run < 128)
-			run++;
-		if (run >= 3) {
-			if (buf_u8(&b, (unsigned)(257 - run)) < 0 ||
-			    buf_u8(&b, in[i]) < 0)
-				goto fail;
-			i += run;
-			continue;
-		}
-		/* Otherwise emit literals until a run worth encoding appears. */
-		{
-			size_t lit = 0;
-			while (i + lit < rowend && lit < 128) {
-				if (i + lit + 2 < rowend &&
-				    in[i + lit] == in[i + lit + 1] &&
-				    in[i + lit] == in[i + lit + 2])
-					break;
-				lit++;
+		state = BASE;
+		while (i < rowend) {
+			/* The longest string of identical bytes, found before
+			 * anything is emitted and left uncapped: a run over 128
+			 * is written as 128 and the rest comes back round. */
+			byte = in[i++];
+			n = 1;
+			while (i < rowend && byte == in[i]) {
+				i++;
+				n++;
 			}
-			if (lit == 0)
-				lit = 1;
-			if (buf_u8(&b, (unsigned)(lit - 1)) < 0 ||
-			    buf_put(&b, in + i, lit) < 0)
-				goto fail;
-			i += lit;
+		again:
+			switch (state) {
+			case BASE:
+				if (n > 1) {
+					state = RUN;
+					if (n > 128) {
+						if (emit_run(&b, 128, byte) < 0)
+							goto fail;
+						n -= 128;
+						goto again;
+					}
+					if (emit_run(&b, n, byte) < 0)
+						goto fail;
+				} else {
+					litpos = b.len;
+					if (buf_u8(&b, 0) < 0 ||
+					    buf_u8(&b, (unsigned)byte) < 0)
+						goto fail;
+					state = LITERAL;
+				}
+				break;
+			case LITERAL:
+				if (n > 1) {
+					state = LITERAL_RUN;
+					if (n > 128) {
+						if (emit_run(&b, 128, byte) < 0)
+							goto fail;
+						n -= 128;
+						goto again;
+					}
+					if (emit_run(&b, n, byte) < 0)
+						goto fail;
+				} else {
+					/* Extend the block already open. */
+					if (++b.p[litpos] == 127)
+						state = BASE;
+					if (buf_u8(&b, (unsigned)byte) < 0)
+						goto fail;
+				}
+				break;
+			case RUN:
+				if (n > 1) {
+					if (n > 128) {
+						if (emit_run(&b, 128, byte) < 0)
+							goto fail;
+						n -= 128;
+						goto again;
+					}
+					if (emit_run(&b, n, byte) < 0)
+						goto fail;
+				} else {
+					litpos = b.len;
+					if (buf_u8(&b, 0) < 0 ||
+					    buf_u8(&b, (unsigned)byte) < 0)
+						goto fail;
+					state = LITERAL;
+				}
+				break;
+			case LITERAL_RUN:
+				/* A two byte run between two literals is turned
+				 * back into literals, since three identical
+				 * bytes cost less as data than as a run. */
+				if (n == 1 && b.p[b.len - 2] == 0xff &&
+				    b.p[litpos] < 126) {
+					state = (unsigned char)(b.p[litpos] += 2)
+					    == 127 ? BASE : LITERAL;
+					b.p[b.len - 2] = b.p[b.len - 1];
+				} else {
+					state = RUN;
+				}
+				goto again;
+			}
 		}
 	}
 	*out = b.p;

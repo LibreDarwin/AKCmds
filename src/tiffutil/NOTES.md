@@ -554,14 +554,15 @@ compare everything but the output bytes (`check_nobytes ./o.tiff`).
 
 Still open, and therefore *not* pinned down by anything in this file:
 
-- LogLuv is not decoded. The way in is open -- a fixture can be written by
-  hand, and one has been -- so what blocks this is the arithmetic on the far
-  side of the decoder. The reference tool hands the file to ImageIO and lets
-  ImageIO decode it: `local/AKCmds-main/tiffutil/tiffutil.m` opens a
-  `CGImageSource` and adds frames to a `CGImageDestination` without touching a
-  pixel itself, and the libtiff it bootstraps with `-Dlogluv=ON` is there to
-  serve `TIFFPrintDirectory`, not the conversion. So there is no C in the
-  reference to port and nothing to read the numbers off but its output.
+- LogLuv is not decoded yet in `main.c`. The way in was open -- a fixture can
+  be written by hand, and one has been -- and the arithmetic on the far side
+  has now been measured out exactly; what is left is implementing it and
+  giving the writer a float output path. The reference tool hands the file
+  to ImageIO and lets ImageIO decode it: `local/AKCmds-main/tiffutil/tiffutil.m`
+  opens a `CGImageSource` and adds frames to a `CGImageDestination` without
+  touching a pixel itself, and the libtiff it bootstraps with `-Dlogluv=ON` is
+  there to serve `TIFFPrintDirectory`, not the conversion. So there is no C in
+  the reference to port and nothing to read the numbers off but its output.
 
   Retracted below: two claims that were once taken for granted here were read
   out of the reference tool's output by a probe that was reading 3 bytes a
@@ -578,14 +579,43 @@ The strip layout, on the other hand, is settled. It comes from the header
       |-+---------------|--------+--------|
       S       Le           ue       ve
 
-  Those four bytes are separated into per-row bit planes and run-length
-  encoded, high byte first:
+  Those four bytes are separated into byte planes and run-length encoded, as
+  four runs in this order, **once per row**:
 
-      for each of the 4 byte planes, high byte then low byte
-        control byte >= 128   a run of (control - 126) pixels, then the value
-        control byte 1..127   that many literal bytes follow
-        control byte 0        nothing
+      Le high byte | Le low byte | ue | ve
+
+  So a W-wide strip holding H rows is `H` repetitions of that four-plane group,
+  not four planes of `W*H` bytes: `4*W*H` bytes before RLE either way, but the
+  grouping differs and only one of them decodes. libtiff registers
+  `LogLuvDecode32` as the *row* decoder and its strip decoder merely loops the
+  row decoder over the strip (`LogLuvDecodeStrip` -> `tif_decoderow`), which is
+  why the runs repeat per row.
+
+  This was measured, not assumed. A 8x3 single-strip fixture built both ways
+  disagrees completely:
+
+      per-row planes    row0 = 1.0071, 1.0003, 0.9902   (the known Le=16384 value)
+                        row1 = 0.0073, 0.0010, 0.0204
+                        row2 = 3.6925, 21.8449, 3.9544
+      per-strip planes  row0 = 0.4989, 1.4345, 0.9841
+                        row1 = 0.0000, -0.0000, 0.0000
+                        row2 = 2.15e+11, -9.21e+09, 3.74e+11
+
+  A single-row fixture cannot tell the two apart, which is exactly why the
+  first pass got this wrong: the H1 fixtures were one row tall.
+
+  One byte per pixel in each plane. The control bytes are the ones libtiff
+  writes:
+
+      control byte >= 128   a run of (control - 126) identical bytes, then the value
+      control byte 1..127   that many literal bytes follow
+      control byte 0        nothing
       runs only pay off from 4 pixels up
+
+  A literal run is capped at 127 bytes, so a plane longer than 127 needs more
+  than one literal control byte. An encoder that emits a whole plane under a
+  single control byte is read back as a *run* instead, which is what made this
+  layout look wrong at first -- a 162-byte plane came back as a run of 36.
 
   Confirmed by alignment, which is the only test that can settle a layout. If
   the strip is understood then `[A,B]` must decode to `f(A), f(B)`, and must
@@ -606,14 +636,14 @@ The strip layout, on the other hand, is settled. It comes from the header
   The reference tool answers a LogLuv file with a 32-bit IEEE float TIFF
   holding linear light on the order of 1e-9, not with 8-bit sRGB. That is the
   right order of magnitude for `Y = 2^((Le + 0.5)/256 - 64)`, which comes to
-  2.1e-9 at `Le = 9000`. It follows that the white fill in `main.c` is not an
+  2.1e-9 at `Le = 9000`. It followed that the white fill in `main.c` was not an
   unmeasured approximation of the right answer but the wrong output type
-  altogether, and that matching this path means emitting a float TIFF, which
-  the writer cannot currently do.
+  altogether, and that matching this path meant emitting a float TIFF, which the
+  writer could not do at the time.
 
   Settled already, and worth not measuring twice:
 
-      Y = 2^((Le + 0.5)/256 - 64), Le = L & 0x7fff, sign in bit 15
+      Y = 2^((Le + 0.5)/256 - 64), Le = L & 0x7fff, sign in bit 31 of the word
       r =  2.690 X - 1.276 Y - 0.414 Z      CCIR-709 primaries, plain 2.0
       g = -1.022 X + 1.978 Y + 0.044 Z      gamma, no colour management
       b =  0.061 X - 0.224 Y + 1.163 Z
@@ -622,12 +652,138 @@ The strip layout, on the other hand, is settled. It comes from the header
   `XYZtoRGB24` applies belong to its 8-bit path, which is not the path in
   evidence here.)
 
-  Still open, and the whole of what remains: how `ue` and `ve` become u' and
-  v'. Scaling them across the usual u' range of -0.5..0.62 and v' of -0.5..0.5
-  drives `y` negative for the probe chroma, so the range in use is not that
-  one; and whether the float samples are XYZ or RGB is not yet settled
-  either. The harness still has no LogLuv file, and `main.c` still does not
-  decode any.
+  The chroma question is closed too, and the answer is not the one that was
+  assumed. `ue` and `ve` are *not* mapped onto the usual CIE u'v' range --
+  doing that drove `y` negative on the probe chroma, which is what first made
+  the layout look wrong. They are scaled by `1/410` and fed to the Libjxl
+  encoder inverse, and the scale is picked so that LogLuv's own white point
+  lands on CIE u'v' `(4/19, 9/19)` exactly:
+
+      u = (ue + 0.5) / 410
+      v = (ve + 0.5) / 410
+      s = 1 / (6*u - 16*v + 12)
+      x = 9*u*s
+      y = 4*v*s
+
+  That `y` is positive and well behaved over the whole code range, and
+  `X/Y = 9u/(4v)` -- a useful exactness check, since it holds independently of
+  luminance. `ue = 86, ve = 194` is LogLuv's white-point *chroma*: it is the
+  pair nearest D65's u'v' `(4/19, 9/19)`, because `ue = 410*4/19 - 0.5` and
+  `ve = 410*9/19 - 0.5`. That is a statement about the chroma only -- the
+  decoded value still needs `Le` to carry the luminance, and `16384` is the
+  nearest `Le` to white:
+
+      (8192, 86, 194)  ->  2.344797e-10, 2.328940e-10, 2.305413e-10
+      (16384, 86, 194) ->  1.007082, 1.000272, 0.990167
+
+  So the samples are RGB, not XYZ, and the full decode is the matrix applied to
+  the derived XYZ. What matters is not negotiable, and it is not the whole
+  chain in one width -- this is the part worth writing down, because an
+  all-double implementation lands within 1 ULP of only about 58% of values:
+
+  - The chroma chain (`u`, `v`, `s`, `x`, `y`, and both divisions) runs in
+    **double**. Rounding any of it to float costs 20-25% of values.
+  - `X`, `Y` and `Z` are each **narrowed once**, on assignment. This matches
+    libtiff's `LogLuv32toXYZ(..., float *X, float *Y, float *Z)` signature: it
+    computes in double and stores narrow.
+  - `X` and `Z` are derived from the **unrounded** `Y`, not from `Yf`. This is
+    the single detail worth the most -- getting it wrong costs 3% of values,
+    and the error it produces is invisible except as a systematic one-ULP
+    shift in `X` alone, which arrives at the samples in the ratio
+    `2.690 : 1.022` that the matrix columns give it.
+  - The matrix is accumulated **from the Y term outwards with a fused
+    multiply-add per step**: the Y term is a plain product, and each of X and
+    Z is then folded in with `fma`. This is the one detail that is invisible
+    in a decimal diff and costs 54 values on its own; see below.
+
+  Written as it should be implemented, with `F` a float32 store, `m` an FMA and
+  every other operation double:
+
+      Y  = exp2((Le + 0.5)/256 - 64)
+      u  = (ue + 0.5)/410 ,  v = (ve + 0.5)/410
+      s  = 1/(6*u - 16*v + 12)
+      x  = 9*u*s ,  y = 4*v*s
+      X  = F((x/y) * Y)          Yf = F(Y)          Z = F(((1 - x - y)/y) * Y)
+      r = F( m(-0.414, Z, m( 2.690, X, -1.276*Yf)))
+      g = F( m( 0.044, Z, m(-1.022, X,  1.978*Yf)))
+      b = F( m( 1.163, Z, m( 0.061, X, -0.224*Yf)))
+
+  `Le == 0` returns zero without touching the chroma, and the mask is not
+  cosmetic: `Le` is 15 magnitude bits and bit 15 of the 16-bit field is a sign
+  flag rather than a luminance. libtiff reads the field as a signed `int`, so a
+  signed `Le` comes out of `LogL16toY` negative and `LogLuv32toXYZ` sends
+  anything `<= 0` to zero -- which is why 32768 and above decode to black here.
+
+  The accumulation order is the last thing to get right, and it is worth
+  spelling out because it is *not* the obvious reading of
+  `a*X + b*Y + c*Z`. Two measurements pin it:
+
+  - Plain left-to-right double, `((a*X) + (b*Y)) + (c*Z)`, gives
+    `343989/344043` = 99.984%. The 54 misses are single-channel one-ULP
+    offsets, and they are not the oracle being sloppy: of those 54, 41 are the
+    *correctly rounded* answer under left-to-right and only 13 are correctly
+    rounded under FMA. So the oracle is neither plain nor exactly rounded, and
+    the tie has to be broken by measurement.
+  - Enumerating all six term orders crossed with plain and FMA accumulation,
+    and with both associations, one form matches every value:
+    `F(fma(c, Z, fma(b, Y, a*X)))` with the Y product unrounded on the way in.
+
+  A grouped association, `a*X + (b*Y + c*Z)`, is worse than either. Plain
+  float32 matrix arithmetic is far worse -- 51.9% -- and so is narrowing the
+  three products but summing in double, at 54.6%, which is a useful reminder
+  that "round the inputs, keep the sum wide" is not what this does.
+
+  Measured over 114681 pixels in four suites -- random across the whole
+  `Le`/`ue`/`ve` space, every `Le` at the white-point chroma, the `Le`
+  extremes with saturated chroma, and a full 256x256 chroma grid -- this
+  reproduces `344043/344043` = **100.0000%** of the reference's float32 values
+  bit-exactly, with no misses in any suite.
+
+  Two formulation choices turned out not to matter at all, which is worth
+  knowing because it means the code does not have to be written to match them:
+  `exp2((Le+.5)/256 - 64)` and libtiff's `exp(M_LN2/256*(Le+.5) - M_LN2*64)`
+  give identical results on every value tested, as do dividing by 410 and
+  multiplying by its reciprocal. The float32 narrowing of `X`, `Y` and `Z`
+  absorbs both differences.
+
+  The ICC profile that comes out on the float path is a red herring, and
+  measuring it was worth the detour only because it is the obvious next
+  suspicion. `/tmp/luvp/c.tif` carries a 572-byte APPL `mntr` RGB profile,
+  version 4, whose `chad` matrix is
+
+      [  1.047882  0.022919 -0.050201 ]     wtpt  0.964203  1.000000  0.824905
+      [  0.029587  0.990479 -0.017059 ]
+      [ -0.009232  0.015076  0.751678 ]
+
+  It is attached metadata and is *not* applied: the luma row measured back out
+  of the reference's own pixels is exactly CCIR-709's
+  `(0.2562008, 0.6782583, 0.0655409)`, not the profile's primaries. Trusting
+  the embedded profile instead of the pixels costs the whole decode. Worth
+  knowing if this ever has to be reproduced byte for byte, and not worth
+  re-deriving.
+
+  ICC v4 tag tables are interleaved -- `sig`, offset, size per entry, twelve
+  bytes each -- not v2's two separate arrays. Reading this profile with the v2
+  layout produces offsets like 1733843290 out of a 572-byte file, which is how
+  the first pass at it failed.
+
+  This is now implemented rather than only characterised. `sgilog_decode()` in
+  `main.c` decodes the four run-length coded byte planes per row into packed
+  host-order 32-bit words, `logluv32_to_rgb()` does the arithmetic above and
+  `logluv_to_float()` re-tags the buffer as three 32-bit IEEE floats, with the
+  writer emitting `SampleFormat 3` and the 572-byte float profile. 27 checks in
+  `tests/tiffutil-parity.sh` compare it against the reference byte for byte.
+
+  Two things are worth recording because both produce plausible-looking output.
+  The word is assembled a byte at a time rather than loaded back out of the
+  plane buffer: on a little-endian machine that load reverses the four bytes and
+  moves the sign bit to bit 31 of the little end, so every pixel with a large
+  `Le` decodes to black. And the big-endian 16-bit sample swap further down
+  `load_image` must not run for this photometric at all -- a LogLuv pixel is one
+  32-bit word, not a pair of 16-bit samples, so the swap only rearranges bytes
+  that were never a sample pair. That one costs 190 wrong bytes in a 16x1
+  fixture and nothing at all in the little-endian case, which is what makes it
+  easy to miss.
 - 8-bit YCbCr Photometric 6 is converted too, and is now reproduced; see the
   YCbCr note above for the model and for the residuals it leaves.
 - The Lab profile carries a build timestamp, so a byte comparison only holds

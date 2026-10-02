@@ -464,6 +464,132 @@ PYEOF
 }
 
 s_unk()    { mkextra "$1/i.tiff" little 347; }
+
+# SGILOG is the one layout the generic builder cannot describe: the strip is
+# four run-length coded byte planes *per row* rather than a row of samples, so
+# the pixels have to be written plane by plane.  mklogluv takes a rows per
+# strip, because that is the parameter that decides whether a strip holds one
+# four-plane group or several -- and a one-row fixture cannot tell the two
+# apart, which is how the plane grouping got wrong to begin with.  "sign" gives
+# every pixel a set sign bit, which the reference answers with black.
+mklogluv() {
+    python3 - "$@" <<'PYEOF'
+import struct, sys
+
+def enc(plane):
+    """SGILOG run-length coding: a control of 126 or more is that many minus
+    126 copies of the next byte, 1..127 is that many literals, 0 does nothing."""
+    out = bytearray()
+    i, n = 0, len(plane)
+    while i < n:
+        run = 1
+        while i + run < n and plane[i + run] == plane[i] and run < 129:
+            run += 1
+        if run >= 4:
+            out.append(126 + run)
+            out.append(plane[i])
+            i += run
+            continue
+        start, lit = i, 0
+        while i < n and lit < 127:
+            run = 1
+            while i + run < n and plane[i + run] == plane[i] and run < 4:
+                run += 1
+            if run >= 4:
+                break
+            i += 1
+            lit += 1
+        out.append(lit)
+        out += plane[start:start + lit]
+    return bytes(out)
+
+
+path, endian, w, h, rps, sign = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:])
+e = '<' if endian == 'little' else '>'
+magic = b'II' if endian == 'little' else b'MM'
+
+rows = []
+for y in range(h):
+    row = []
+    for x in range(w):
+        le = (0x8000 | (y * w + x) * 7 % 0x7800) if sign else ((y * w + x) * 11 % 0x7ffe + 1)
+        row.append((le << 16) | ((x * 5 + y) % 256) << 8 | ((x * 3 + y * 2) % 256))
+    rows.append(row)
+
+# The word's bytes, most significant first: Le high (sign included), Le low,
+# ue, ve.
+def plane_of(row, f):
+    if f == 0:
+        return bytes((px >> 24) & 0xff for px in row)
+    if f == 1:
+        return bytes((px >> 16) & 0xff for px in row)
+    if f == 2:
+        return bytes((px >> 8) & 0xff for px in row)
+    return bytes(px & 0xff for px in row)
+
+
+body = bytearray(magic + struct.pack(e + 'HI', 42, 0))
+offs, cnts = [], []
+s = 0
+while s < h:
+    n = min(s + rps, h)
+    d = bytearray()
+    for i in range(s, n):
+        for f in range(4):
+            d += enc(plane_of(rows[i], f))
+    offs.append(len(body))
+    body += d
+    cnts.append(len(d))
+    s = n
+
+ifd = len(body)
+ntags = 10
+p258 = ifd + 2 + 12 * ntags + 4
+p273 = p258 + 6
+p279 = p273 + 4 * len(offs)
+body += struct.pack(e + 'H', ntags)
+# A value that fits in the four byte field goes in the field.  StripOffsets and
+# StripByteCounts only go out of line when there is more than one of them, so a
+# single strip fixture has to carry them inline or a reader takes the pointer as
+# the value.
+one = len(offs) == 1
+entries = [(256, 3, 1, w), (257, 3, 1, h), (258, 3, 3, None), (259, 3, 1, 34676),
+           (262, 3, 1, 32845), (273, 4, len(offs), offs[0] if one else None),
+           (277, 3, 1, 3), (278, 4, 1, rps),
+           (279, 4, len(cnts), cnts[0] if one else None), (284, 3, 1, 1)]
+ptrs = {258: p258, 273: p273, 279: p279}
+for tag, typ, cnt, val in entries:
+    body += struct.pack(e + 'HHI', tag, typ, cnt)
+    if val is None:
+        body += struct.pack(e + 'I', ptrs[tag])
+    else:
+        raw = struct.pack(e + ('H' if typ == 3 else 'I'), val)
+        body += raw + b'\0' * (4 - len(raw))
+body += struct.pack(e + 'I', 0)
+while len(body) < p258:
+    body += b'\0'
+body += struct.pack(e + 'HHH', 16, 16, 16)
+if not one:
+    while len(body) < p273:
+        body += b'\0'
+    body += struct.pack(e + '%dI' % len(offs), *offs)
+    body += struct.pack(e + '%dI' % len(cnts), *cnts)
+struct.pack_into(e + 'I', body, 4, ifd)
+
+with open(path, 'wb') as f:
+    f.write(bytes(body))
+PYEOF
+}
+
+s_logluv_1x1()    { mklogluv "$1/i.tiff" little 1 1 1 0; }
+s_logluv_1x4()    { mklogluv "$1/i.tiff" little 1 4 1 0; }
+s_logluv_16x1()   { mklogluv "$1/i.tiff" little 16 1 1 0; }
+s_logluv_16x1B()  { mklogluv "$1/i.tiff" big    16 1 1 0; }
+s_logluv_40x5()   { mklogluv "$1/i.tiff" little 40 5 3 0; }
+s_logluv_100x3()  { mklogluv "$1/i.tiff" little 100 3 1 0; }
+s_logluv_7x7()    { mklogluv "$1/i.tiff" little 7 7 7 0; }
+s_logluv_64x4()   { mklogluv "$1/i.tiff" little 64 4 4 0; }
+s_logluv_sign()   { mklogluv "$1/i.tiff" little 16 4 2 1; }
 s_unk_hi() { mkextra "$1/i.tiff" little 65000; }
 s_unk_two(){ mkextra "$1/i.tiff" little 347,65000,65001; }
 # Descending on purpose: the warning has to follow the directory, not the
@@ -714,6 +840,22 @@ done
 for shape in "$YCBCRW" "$YCBCR709"; do
     check "-none ycbcr BE $(printf '%s' "$shape" | tr ',' '-')" \
         big "$shape" s_none -- -none i.tiff -out o.tiff
+done
+
+# --- LogLuv, which is decoded into 32-bit float samples -------------------
+# The reference answers a SGILOG file with a float TIFF, so this is a change of
+# output type rather than a conversion of one, and the depth and the sample
+# format both have to be re-tagged on the way out.  The shapes cover a single
+# pixel, one strip holding several rows (where the four planes repeat per row
+# rather than spanning the strip), a strip per row, a single strip covering the
+# whole image, both byte orders, and the sign bit that the reference answers with
+# black.
+for op in -none -lzw -packbits; do
+    for fx in s_logluv_1x1 s_logluv_1x4 s_logluv_16x1 s_logluv_40x5 \
+             s_logluv_100x3 s_logluv_7x7 s_logluv_64x4 s_logluv_sign; do
+        check "$op $fx" little - "$fx" -- "$op" i.tiff -out o.tiff
+    done
+    check "$op s_logluv_16x1B" big - s_logluv_16x1B -- "$op" i.tiff -out o.tiff
 done
 
 # --- one bit of gray, which the reference tool G4-compresses -----------------

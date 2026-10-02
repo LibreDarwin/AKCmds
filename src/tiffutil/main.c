@@ -125,6 +125,168 @@ ycbcr_to_rgb(unsigned char **rawp, size_t *rawlenp, uint32_t w, uint32_t h,
 	return 0;
 }
 
+/* Decode a whole SGILOG strip into packed LogLuv32 words, host order.
+ * Returns 0 on success, -1 if the encoded bytes run out early. */
+static int
+sgilog_decode(const unsigned char *in, size_t inlen, uint32_t w, uint32_t rows,
+    unsigned char **out, size_t *outlen)
+{
+	uint8_t (*planes)[4];
+	unsigned char *o;
+	size_t need = (size_t)w * rows * 4;
+
+	*out = NULL;
+	*outlen = 0;
+	if (w == 0 || rows == 0)
+		return -1;
+	planes = malloc(w * 4);
+	o = planes != NULL ? malloc(need) : NULL;
+	if (o == NULL) {
+		free(planes);
+		return -1;
+	}
+	for (uint32_t y = 0; y < rows; y++) {
+		unsigned char *p = o + (size_t)y * w * 4;
+
+		for (int q = 0; q < 4; q++) {
+			uint8_t *plane = (uint8_t *)planes + (size_t)q * w;
+			uint32_t i = 0;
+
+			while (i < w) {
+				unsigned rc;
+
+				if (inlen == 0)
+					goto truncated;
+				rc = *in++;
+				inlen--;
+				if (rc >= 128) {
+					uint8_t v;
+
+					if (inlen == 0)
+						goto truncated;
+					v = *in++;
+					inlen--;
+					if (rc - 126 > w - i)
+						rc = 126 + w - i;
+					memset(plane + i, v, rc - 126);
+					i += rc - 126;
+				} else if (rc != 0) {
+					if (rc > w - i)
+						rc = w - i;
+					if (rc > inlen)
+						goto truncated;
+					memcpy(plane + i, in, rc);
+					in += rc;
+					inlen -= rc;
+					i += rc;
+				}
+			}
+		}
+		{
+			const uint8_t *pl = (const uint8_t *)planes;
+
+			for (uint32_t x = 0; x < w; x++) {
+				/* The four planes are the word's bytes most
+				 * significant first, so they are assembled
+				 * into a host order word rather than read
+				 * back out of the buffer: the buffer is
+				 * native, and a load would reverse the bytes
+				 * on a little endian machine and move the
+				 * sign bit to the top. */
+				uint32_t word =
+				    ((uint32_t)pl[0 * w + x] << 24) |
+				    ((uint32_t)pl[1 * w + x] << 16) |
+				    ((uint32_t)pl[2 * w + x] << 8) |
+				    (uint32_t)pl[3 * w + x];
+
+				memcpy(p + x * 4, &word, sizeof(word));
+			}
+		}
+	}
+	free(planes);
+	*out = o;
+	*outlen = need;
+	return 0;
+truncated:
+	free(planes);
+	free(o);
+	return -1;
+}
+
+/* One LogLuv32 pixel to linear RGB as three floats.
+ *
+ * The precision here is load bearing and it is not one width throughout, so
+ * it is spelled out rather than left to the compiler: the chroma chain runs in
+ * double, X/Y/Z are narrowed to float once, and the matrix is accumulated
+ * from the Y term outwards with one fused multiply-add per fold.  Ordinary
+ * left-to-right evaluation lands within one ULP on only 99.984% of values;
+ * this order is exact on all of them.  See NOTES.md. */
+static void
+logluv32_to_rgb(uint32_t word, float *rgb)
+{
+	int16_t le16 = (int16_t)(uint16_t)(word >> 16);
+	double Y, u, v, s, x, y;
+	float X, Yf, Z;
+
+	/* A set sign bit means a negative luminance, and libtiff answers both
+	 * that and an all-zero Le with black. */
+	if (le16 < 0 || (le16 & 0x7fff) == 0) {
+		rgb[0] = rgb[1] = rgb[2] = 0.0f;
+		return;
+	}
+
+	Y = exp2(((le16 & 0x7fff) + 0.5) / 256.0 - 64.0);
+	u = ((word >> 8) & 0xff) + 0.5;
+	v = (word & 0xff) + 0.5;
+	s = 1.0 / (6.0 * u / 410.0 - 16.0 * v / 410.0 + 12.0);
+	x = 9.0 * u / 410.0 * s;
+	y = 4.0 * v / 410.0 * s;
+
+	X = (float)((x / y) * Y);
+	Yf = (float)Y;
+	Z = (float)(((1.0 - x - y) / y) * Y);
+
+	rgb[0] = (float)fma(-0.414, Z, fma(2.690, X, -1.276 * Yf));
+	rgb[1] = (float)fma(0.044, Z, fma(-1.022, X, 1.978 * Yf));
+	rgb[2] = (float)fma(1.163, Z, fma(0.061, X, -0.224 * Yf));
+}
+
+/* Convert a packed LogLuv32 buffer to big-endian float RGB in place of raw.
+ *
+ * The reference tool answers a LogLuv file with 32-bit IEEE float samples, so
+ * this is a different output type rather than a coarser version of the same
+ * one; the caller has to report that in the rewritten file. */
+static int
+logluv_to_float(unsigned char **rawp, size_t *rawlenp, size_t npix)
+{
+	unsigned char *raw = *rawp, *out;
+	const uint32_t *in = (const uint32_t *)(const void *)raw;
+
+	if (npix == 0 || npix > SIZE_MAX / 12)
+		return -1;
+	out = malloc(npix * 12);
+	if (out == NULL)
+		return -1;
+	for (size_t i = 0; i < npix; i++) {
+		float rgb[3];
+
+		logluv32_to_rgb(in[i], rgb);
+		for (int c = 0; c < 3; c++) {
+			uint32_t bits;
+
+			memcpy(&bits, &rgb[c], sizeof(bits));
+			out[i * 12 + c * 4 + 0] = (unsigned char)(bits >> 24);
+			out[i * 12 + c * 4 + 1] = (unsigned char)(bits >> 16);
+			out[i * 12 + c * 4 + 2] = (unsigned char)(bits >> 8);
+			out[i * 12 + c * 4 + 3] = (unsigned char)bits;
+		}
+	}
+	free(*rawp);
+	*rawp = out;
+	*rawlenp = npix * 12;
+	return 0;
+}
+
 /* Load directory d as a plain sample buffer in native endianness. */
 static int
 load_image(tiff_t *t, int d, tuimg_t *im, int *err)
@@ -199,6 +361,30 @@ load_image(tiff_t *t, int d, tuimg_t *im, int *err)
 				if (g4_decode(t->data + off, bc, w, rows, invert,
 				    &dec, &declen) < 0)
 					goto oom;
+				buf_put(&all, dec, declen);
+				free(dec);
+				rowsdone += rows;
+			}
+			break;
+		case COMP_SGILOG:
+			/* Run-length coded byte planes, four of them per row, so
+			 * this strip needs its own row count the same way
+			 * facsimile does. */
+			{
+				uint32_t rows = rps != 0 ? rps : h;
+
+				if (rows > h - rowsdone)
+					rows = h - rowsdone;
+				if (bps != 16 || spp != 3)
+					goto notimpl;
+				if (sgilog_decode(t->data + off, bc, w, rows,
+				    &dec, &declen) < 0) {
+					tu_warn("TIFFReadEncodedStrip: Read "
+					    "error.\n");
+					*err = 1;
+					buf_free(&all);
+					return -1;
+				}
 				buf_put(&all, dec, declen);
 				free(dec);
 				rowsdone += rows;
@@ -466,8 +652,13 @@ notimpl:
 	}
 	/* Samples reach the writer in host order; a big-endian source has to
 	 * be converted, or the writer's swap back to big-endian double-swaps
-	 * it. Little-endian sources need nothing. */
-	if (bps == 16 && t->be) {
+	 * it. Little-endian sources need nothing.
+	 *
+	 * LogLuv is the exception: it carries a 32-bit word per pixel rather than
+	 * 16-bit samples, and the decoder has already assembled those words in
+	 * host order, so swapping pairs here would only rearrange bytes that were
+	 * never a sample pair to begin with. */
+	if (bps == 16 && t->be && photo != 32845) {
 		size_t i;
 		for (i = 0; i + 1 < rawlen; i += 2) {
 			unsigned char u = raw[i];
@@ -503,20 +694,21 @@ notimpl:
 		ycbcr_to_rgb(&raw, &rawlen, w, h, kc[0], kc[1], kc[2]);
 	}
 
-	/* LogLuv is not decoded here.  A fixture can be built now, though -- the
-	 * strip is the 32-bit word S:1 Le:15 ue:8 ve:8 with those four bytes
-	 * separated into per-row bit planes and run-length encoded, and such a
-	 * file round-trips through the reference tool with its pixels aligned.
-	 * So what is missing is the arithmetic, not a way in; see NOTES.md.
+	/* LogLuv is decoded here.  The strip carried four run-length coded byte
+	 * planes per row, which sgilog_decode() has already put back into packed
+	 * 32-bit words, so all that is left is the arithmetic.
 	 *
-	 * It is worth being exact about why the fill below is wrong rather than
-	 * merely unmeasured: the reference tool answers a LogLuv file with a
-	 * 32-bit IEEE float TIFF, BitsPerSample 32,32,32 and SampleFormat 3,
-	 * holding linear light around 1e-9.  Eight-bit white is not a rough
-	 * version of that answer, it is a different output type, so nothing here
-	 * should be read as the reference tool's behaviour. */
-	if (photo == 32845 && bps == 8 && rawlen > 0)
-		memset(raw, 0xff, rawlen);
+	 * The reference tool answers a LogLuv file with a 32-bit IEEE float
+	 * TIFF, BitsPerSample 32,32,32 and SampleFormat 3, holding linear
+	 * light rather than gamma-encoded code values.  That is a different
+	 * output type, not a coarser version of this one, so the depth and the
+	 * sample format both have to be re-tagged after the conversion. */
+	if (photo == 32845 && bps == 16 && spp == 3) {
+		if (logluv_to_float(&raw, &rawlen, (size_t)w * h) < 0)
+			goto oom;
+		im->bps = 32;
+		im->floatout = 1;
+	}
 
 	im->px = raw;
 	im->pxlen = rawlen;

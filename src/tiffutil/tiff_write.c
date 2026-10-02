@@ -66,6 +66,7 @@ typedef struct {
 	const char *desc;
 	const char *software;
 	uint16_t xalpha;
+	int floatout;                /* samples are IEEE float, not integers */
 } wimg_t;
 
 static size_t
@@ -138,8 +139,10 @@ write_dir(buf_t *out, const wimg_t *im, int compression, int predictor,
 
 	for (uint32_t i = 0; i < im->spp && i < MAX_SPP; i++)
 		be16(bps_ext + 2 * i, im->bps);
+	/* SampleFormat 3 is IEEE float, and the only output that carries it is
+	 * the LogLuv one: every other colour space is handed back as integers. */
 	for (uint32_t i = 0; i < im->spp && i < MAX_SPP; i++)
-		be16(fmt_ext + 2 * i, 1);       /* SampleFormat = unsigned integer */
+		be16(fmt_ext + 2 * i, im->floatout ? 3 : 1);
 
 	/* Fields are appended in ascending tag order. */
 	f[nf++] = (wfield_t){TAG_IMAGEWIDTH, 3, 1, im->width, NULL, 0};
@@ -366,8 +369,15 @@ tiff_write_images(const char *path, const tuwrite_t *items, int n)
 		if (items[i].im.unusable)
 			continue;
 
-		tiff_icc_for((int)items[i].im.outphoto, labscratch,
-		    sizeof(labscratch), &icc, &icclen);
+		/* The float output gets its own profile rather than the RGB
+		 * one, even though both are photometric 2. */
+		if (items[i].im.floatout) {
+			icc = iccProfileFloat;
+			icclen = sizeof(iccProfileFloat);
+		} else {
+			tiff_icc_for((int)items[i].im.outphoto, labscratch,
+			    sizeof(labscratch), &icc, &icclen);
+		}
 		m.width = items[i].im.width;
 		m.height = items[i].im.height;
 		m.bps = items[i].im.outbps != 0 ? items[i].im.outbps :
@@ -385,6 +395,7 @@ tiff_write_images(const char *path, const tuwrite_t *items, int n)
 		m.desc = items[i].desc;
 		m.software = items[i].software;
 		m.xalpha = items[i].im.xalpha;
+		m.floatout = items[i].im.floatout;
 		if (write_dir(&out, &m, items[i].compression, items[i].predictor,
 		    icc, icclen, nwritten == 0, &ifd_off, &ifd_pos) < 0) {
 			buf_free(&out);

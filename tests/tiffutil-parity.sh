@@ -411,9 +411,11 @@ s_pred() {
 
 # Fixture builder for the unknown-field warning: an uncompressed 8-bit gray
 # directory carrying extra tags.  One semicolon-separated group per directory,
-# and the tags inside a group go in exactly as written, so a case can pin that
-# a warning follows the order the entries sit in rather than the order of the
-# tag numbers.  A tag is written as "n" or as "n=value".
+# and the entries inside a group go in exactly as written and are never
+# reordered, so a case can pin that a warning follows the order the entries
+# sit in rather than the order of the tag numbers -- and so a case can ask for
+# a tag twice, which is what a directory that repeats a tag means.  A tag is
+# written as "n" or as "n=value".
 #
 #   mkextra <path> <endian> <tags>[;<tags>...]
 mkextra() {
@@ -441,7 +443,6 @@ for group in sys.argv[3].split(';'):
     for spec in group.split(','):
         tag, _, val = spec.partition('=')
         entries.append((int(tag), 3, 1, [int(val) if val else 1]))
-    entries.sort(key=lambda x: x[0])
     fmt = {3: 'H', 4: 'I'}
     ifd = len(body)
     body += struct.pack(e + 'H', len(entries))
@@ -468,6 +469,33 @@ s_unk_two(){ mkextra "$1/i.tiff" little 347,65000,65001; }
 # Descending on purpose: the warning has to follow the directory, not the
 # tag numbers.
 s_unk_rev(){ mkextra "$1/i.tiff" little 65001,65000,347; }
+# Entries that do not ascend.  A tag listed again counts as going backwards,
+# which is what makes every one of these trip the same check.
+s_ooo_one() { mkextra "$1/i.tiff" little 259=1,258=8; }
+# The same tag twice, both entries holding the same value.
+s_dup_same() { mkextra "$1/i.tiff" little 258=8,258=8; }
+s_dup_unk()  { mkextra "$1/i.tiff" little 347=1,347=1; }
+s_dup_two()  { mkextra "$1/i.tiff" little 347=1,347=1;258=8,258=8; }
+s_dup_dir()  { mkextra "$1/i.tiff" little '347=1,347=1;347=1,347=1'; }
+# The same tag twice with the entries disagreeing.  Only the first is ever set,
+# so the second value is never acted on at all.
+s_dup_diff() { mkextra "$1/i.tiff" little 258=8,258=4; }
+s_dup_3x()   { mkextra "$1/i.tiff" little 258=8,258=4,258=2; }
+s_dup_unkd() { mkextra "$1/i.tiff" little 347=1,347=2; }
+# Two different unnamed tags, each listed twice, with the copies interleaved.
+# Whichever entry comes first is the one that is set, so the warnings read
+# 347 then 348 rather than 348 then 347.
+s_dup_int()  { mkextra "$1/i.tiff" little 347=1,348=1,347=1,348=1; }
+# A field that is turned down, listed twice.  The bad value first is reported
+# once and the good value after it says nothing; the good value first means the
+# bad one is never set, so there is nothing to report.
+s_dup_soft() { mkextra "$1/i.tiff" little 266=0,266=0; }
+s_dup_soft2(){ mkextra "$1/i.tiff" little 266=0,266=2; }
+s_dup_soft3(){ mkextra "$1/i.tiff" little 266=2,266=0; }
+# DataType and SampleFormat say the same thing in two numberings, so which one
+# the report believes is decided by which entry sits later.
+s_sf_dt()    { mkextra "$1/i.tiff" little 339=3,32996=2; }
+s_sf_dt_6()  { mkextra "$1/i.tiff" little 32996=1,339=6; }
 s_unk_dir(){ mkextra "$1/i.tiff" little '347;65000'; }
 s_unk_be() { mkextra "$1/i.tiff" big 347; }
 # Tag 333 is a name the reference tool has, but asking for one InkName hangs
@@ -734,6 +762,52 @@ for op in -info -verboseinfo; do
 done
 check "unknown tag -dump"      little "$G8W" s_unk     -- -dump i.tiff
 check "unknown tag convert"    little "$G8W" s_unk     -- -none i.tiff -out o.tiff
+# Entries are meant to ascend, and a tag listed again counts as going
+# backwards, so a repeat trips the same check a larger tag ahead of a smaller
+# one does.  It is said once for the directory, ahead of everything else that
+# directory has to say, and only where the directory is read through the TIFF
+# library: -dump walks the raw IFD and says nothing, and a conversion says
+# nothing either.
+for op in -info -verboseinfo; do
+    check "entries descending $op"   little "$G8W" s_ooo_one  -- "$op" i.tiff
+    check "tag twice $op"            little "$G8W" s_dup_same -- "$op" i.tiff
+    check "unknown twice $op"        little "$G8W" s_dup_unk  -- "$op" i.tiff
+    check "tag twice interleaved $op" little "$G8W" s_dup_int -- "$op" i.tiff
+    check "twice per directory $op"  little "$G8W" s_dup_dir  -- "$op" i.tiff
+    check "tag twice disagree $op"   little "$G8W" s_dup_diff -- "$op" i.tiff
+    check "tag three times $op"      little "$G8W" s_dup_3x   -- "$op" i.tiff
+    check "unknown twice bad $op"    little "$G8W" s_dup_unkd -- "$op" i.tiff
+    check "refused twice $op"        little "$G8W" s_dup_soft -- "$op" i.tiff
+    check "refused then good $op"    little "$G8W" s_dup_soft2 -- "$op" i.tiff
+    check "good then refused $op"    little "$G8W" s_dup_soft3 -- "$op" i.tiff
+done
+check "entries descending -dump" little "$G8W" s_ooo_one  -- -dump i.tiff
+check "tag twice -dump"          little "$G8W" s_dup_same -- -dump i.tiff
+# -dump reports the entry it is standing on, so a tag listed twice prints its
+# own value on each of the two lines rather than the first value twice.
+check "tag twice disagree -dump" little "$G8W" s_dup_diff -- -dump i.tiff
+check "tag three times -dump"    little "$G8W" s_dup_3x   -- -dump i.tiff
+check "unknown twice bad -dump"  little "$G8W" s_dup_unkd -- -dump i.tiff
+# Listing a tag twice with the entries agreeing leaves nothing to act on, so
+# the image comes through and the output is compared byte for byte.
+for setup in s_dup_same s_dup_unk s_dup_soft s_ooo_one s_dup_dir s_dup_int; do
+    check "$setup convert" little "$G8W" "$setup" -- -none i.tiff -out o.tiff
+done
+# Agreeing about the value is what matters here.  Two entries that disagree
+# leave the reference tool unable to make sense of the image, so it loses the
+# image and reports success; we write the image through and leave the output
+# bytes out of the comparison.  Which of the two it believes is decided by the
+# one sitting first, so a good value followed by a bad one is no worse than
+# the other way round -- both lose the image.
+for setup in s_dup_diff s_dup_3x s_dup_unkd s_dup_soft2 s_dup_soft3; do
+    check_nobytes ./o.tiff "$setup write" little "$G8W" "$setup" \
+        -- -none i.tiff -out o.tiff
+done
+# DataType and SampleFormat both say what the samples are, in numberings a
+# count apart, so the one sitting later in the directory is the one believed.
+check "sampleformat then datatype" little "$G8W" s_sf_dt   -- -info i.tiff
+check "datatype then sampleformat" little "$G8W" s_dt_sf   -- -info i.tiff
+check "sampleformat unrenderable"   little "$G8W" s_sf_dt_6 -- -info i.tiff
 # Predictor is named only for the codecs that predict.  Under an uncompressed
 # directory it is as unnamed as anything else; under LZW it is not.
 check "predictor -info uncompressed" little "$G8W" s_none -- -info i.tiff

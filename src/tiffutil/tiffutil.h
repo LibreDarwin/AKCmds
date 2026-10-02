@@ -80,6 +80,7 @@ int tu_get_rational(tiff_t *t, int dir, uint16_t tag, uint32_t *num,
     uint32_t *den);
 int tu_get_bytes(tiff_t *t, int dir, uint16_t tag, unsigned char **out, uint32_t *n);
 int tu_has_tag(tiff_t *t, int dir, uint16_t tag);
+unsigned char *tu_ent_raw(tiff_t *t, int dir, uint32_t idx, int *type, uint32_t *count);
 unsigned char *tu_tag_raw(tiff_t *t, int dir, uint16_t tag, int *type, uint32_t *count);
 const char *tu_type_name(int type);
 const char *tu_compression_name(uint32_t c);

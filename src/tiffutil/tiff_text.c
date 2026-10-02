@@ -271,6 +271,43 @@ icc_profile_name(tiff_t *t, int dir, char *out, size_t outsz)
 	free(icc);
 }
 
+/* Where a tag sits in a directory, or -1 when it is not there. */
+static int
+entry_index(const tiff_t *t, int d, uint16_t tag)
+{
+	for (uint32_t i = 0; i < t->ndirs[d]; i++)
+		if (t->ents[d][i].tag == tag)
+			return (int)i;
+	return -1;
+}
+
+/* A tag listed twice in one directory is set once, from the entry that comes
+ * first, and the entries after it are never set at all.  So every complaint
+ * about a tag is made where its first entry sits, and the copies after it
+ * have nothing new to say. */
+static int
+entry_is_first(const tiff_t *t, int d, uint32_t i)
+{
+	uint16_t tag = t->ents[d][i].tag;
+
+	for (uint32_t k = 0; k < i; k++)
+		if (t->ents[d][k].tag == tag)
+			return 0;
+	return 1;
+}
+
+/* A directory's entries are meant to ascend.  A repeat counts as going
+ * backwards, so a tag listed twice trips this exactly as a larger tag written
+ * ahead of a smaller one does. */
+static int
+dir_not_ascending(const tiff_t *t, int d)
+{
+	for (uint32_t i = 1; i < t->ndirs[d]; i++)
+		if (t->ents[d][i].tag <= t->ents[d][i - 1].tag)
+			return 1;
+	return 0;
+}
+
 int
 tu_cmd_info(const char *path, int verbose)
 {
@@ -294,6 +331,14 @@ tu_cmd_info(const char *path, int verbose)
 		uint32_t shown_rps = 0;
 		int resplit = 0;
 
+		/* Entries are meant to ascend.  This is said first, ahead of
+		 * everything else the directory has to say, and once for the
+		 * directory rather than once for the entry that gave it away. */
+		if (dir_not_ascending(&t, d))
+			tu_warn("TIFFReadDirectoryCheckOrder: Warning, Invalid"
+			    " TIFF directory; tags are not sorted in ascending"
+			    " order.\n");
+
 		/* Unnamed fields are named on stderr as the directory is read,
 		 * in the order they sit in it rather than in tag order, and
 		 * before any of the other per-directory complaints. */
@@ -304,6 +349,8 @@ tu_cmd_info(const char *path, int verbose)
 			for (uint32_t i = 0; i < t.ndirs[d]; i++) {
 				uint16_t tag = t.ents[d][i].tag;
 
+				if (!entry_is_first(&t, d, i))
+					continue;
 				if (!tag_is_known(tag, comp))
 					tu_warn("TIFFReadDirectory: Warning,"
 					    " Unknown field with tag %u (0x%x)"
@@ -337,7 +384,11 @@ tu_cmd_info(const char *path, int verbose)
 			default:
 				continue;
 			}
-			/* Every one of them starts at 1. */
+			/* Every one of them starts at 1, and only the first
+			 * entry for a tag is ever set, so a tag that is listed
+			 * again says nothing the first one did not. */
+			if (!entry_is_first(&t, d, i))
+				continue;
 			if (tu_get_uint(&t, d, tag, &val) == 0 &&
 			    (val == 0 || val > hi))
 				tu_warn("_TIFFVSetField: %s: Bad value %u for"
@@ -483,23 +534,31 @@ tu_cmd_info(const char *path, int verbose)
 			    : v == 2 ? "pixels/inch" : "pixels/cm");
 		if (tu_get_uint(&t, d, TAG_BITSPERSAMPLE, &bps) == 0)
 			printf("  Bits/Sample: %u\n", bps);
-		if (tu_get_uint(&t, d, TAG_DATATYPE, &v) == 0) {
-			const char *sf;
+		/* SampleFormat is what this line reports, but DataType says the
+		 * same thing in the numbering that Silicon Graphics used, so a
+		 * directory may carry either or both.  Whichever entry sits
+		 * later is the one that counts, and each has its own numbering
+		 * for the words. */
+		{
+			int dt = entry_index(&t, d, TAG_DATATYPE);
+			int sf = entry_index(&t, d, TAG_SAMPLEFORMAT);
+			int pick = dt > sf ? dt : sf;
 
-			sf = datatype_phrase(v);
-			if (sf != NULL)
-				printf("  Sample Format: %s\n", sf);
-			else
-				printf("  Sample Format: %u (0x%x)\n", v, v);
-		} else if (tu_has_tag(&t, d, TAG_SAMPLEFORMAT)) {
-			const char *sf;
+			if (pick >= 0) {
+				const char *s;
+				uint32_t val = 0;
 
-			tu_get_uint(&t, d, TAG_SAMPLEFORMAT, &v);
-			sf = sampleformat_phrase(v);
-			if (sf != NULL)
-				printf("  Sample Format: %s\n", sf);
-			else
-				printf("  Sample Format: %u (0x%x)\n", v, v);
+				tu_get_uint(&t, d,
+				    pick == dt ? TAG_DATATYPE : TAG_SAMPLEFORMAT,
+				    &val);
+				s = pick == dt ? datatype_phrase(val)
+				    : sampleformat_phrase(val);
+				if (s != NULL)
+					printf("  Sample Format: %s\n", s);
+				else
+					printf("  Sample Format: %u (0x%x)\n",
+					    val, val);
+			}
 		}
 		if (tu_get_uint(&t, d, TAG_COMPRESSION, &v) == 0)
 			printf("  Compression Scheme: %s\n", tu_compression_name(v));
@@ -671,7 +730,10 @@ tu_cmd_dump(const char *path)
 			const char *nm = dump_tag_name(tag);
 			int rtype;
 			uint32_t rcount;
-			unsigned char *val = tu_tag_raw(&t, d, tag, &rtype, &rcount);
+			/* Each line reports the entry it sits on, so a tag
+			 * listed twice prints its own value twice rather than
+			 * the first copy's value twice. */
+			unsigned char *val = tu_ent_raw(&t, d, i, &rtype, &rcount);
 			size_t esz = tu_type_size(rtype);
 			uint32_t shown = 0, k;
 

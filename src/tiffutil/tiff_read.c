@@ -101,45 +101,59 @@ tu_type_name(int type)
 	return tu_type_names[type];
 }
 
-/* Read one tag's raw value bytes out of the file, following the offset for
- * anything wider than four bytes.  Returns a malloc'd copy, or NULL. */
+/* Read one directory entry's raw value bytes out of the file, following the
+ * offset for anything wider than four bytes.  Returns a malloc'd copy, or
+ * NULL.  This asks about the entry itself, so a tag listed twice in a
+ * directory yields a different answer for each of the two lines -dump draws. */
 unsigned char *
-tu_tag_raw(tiff_t *t, int dir, uint16_t tag, int *type, uint32_t *count)
+tu_ent_raw(tiff_t *t, int dir, uint32_t idx, int *type, uint32_t *count)
 {
+	tiff_ent_t *e;
 	uint32_t n, off;
 	size_t sz;
 	unsigned char *out;
 	int be = t->be;
 
+	if (dir < 0 || dir >= t->ndir || idx >= t->ndirs[dir])
+		return NULL;
+	e = &t->ents[dir][idx];
+	n = e->count;
+	sz = type_size(e->type) * n;
+	if (sz == 0)
+		return NULL;
+	if (sz <= 4) {
+		out = malloc(sz);
+		if (out == NULL)
+			return NULL;
+		memcpy(out, e->inl, sz);
+	} else {
+		off = rd_be32(e->inl, be);
+		if (off > t->len || sz > t->len - off) {
+			tu_warn("TIFFFetchStripThing: Invalid strip offset/length.\n");
+			return NULL;
+		}
+		out = malloc(sz);
+		if (out == NULL)
+			return NULL;
+		memcpy(out, t->data + off, sz);
+	}
+	*type = e->type;
+	*count = n;
+	return out;
+}
+
+/* Read one tag's raw value bytes, which is to say the first entry carrying
+ * it: a tag listed twice is set from the entry that comes first and the one
+ * after it is never set at all. */
+unsigned char *
+tu_tag_raw(tiff_t *t, int dir, uint16_t tag, int *type, uint32_t *count)
+{
 	if (dir < 0 || dir >= t->ndir)
 		return NULL;
 	for (uint32_t i = 0; i < t->ndirs[dir]; i++) {
-		tiff_ent_t *e = &t->ents[dir][i];
-		if (e->tag != tag)
+		if (t->ents[dir][i].tag != tag)
 			continue;
-		n = e->count;
-		sz = type_size(e->type) * n;
-		if (sz == 0)
-			return NULL;
-		if (sz <= 4) {
-			out = malloc(sz ? sz : 1);
-			if (out == NULL)
-				return NULL;
-			memcpy(out, e->inl, sz);
-		} else {
-			off = rd_be32(e->inl, be);
-			if (off > t->len || sz > t->len - off) {
-				tu_warn("TIFFFetchStripThing: Invalid strip offset/length.\n");
-				return NULL;
-			}
-			out = malloc(sz);
-			if (out == NULL)
-				return NULL;
-			memcpy(out, t->data + off, sz);
-		}
-		*type = e->type;
-		*count = n;
-		return out;
+		return tu_ent_raw(t, dir, i, type, count);
 	}
 	return NULL;
 }

@@ -428,10 +428,12 @@ this port prints the same two lines and stops with a non-zero status. The
 harness compares both streams and all the bytes for these cases and leaves only
 the exit status out (`check_nostatus`).
 
-**DataType wins over SampleFormat, and names the middle two the other way
-round.** A directory carrying both 339 and 32996 is named from 32996, because
-it is set second; DataType's enumeration is SampleFormat's with 1 and 2
-exchanged:
+**Whichever of DataType and SampleFormat sits later is the one reported.** The two
+tags say the same thing in numberings a count apart, and a directory may carry
+either or both, so the report follows the entry that comes last rather than
+preferring one tag: with 32996 after 339 the report is named from 32996, and
+with 339 after 32996 it is named from 339. DataType's enumeration is
+SampleFormat's with 1 and 2 exchanged:
 
     value    SampleFormat        DataType
     0        refused             void
@@ -511,15 +513,47 @@ Known gaps, as reported by that harness and not yet fixed:
   outside the harness as well. Kept here so the earlier claims are visibly
   retired rather than quietly dropped.
 
+**A tag listed twice is set once, from the entry that comes first.** A directory's
+entries are meant to ascend, and a repeat counts as going backwards, so a tag
+listed twice trips the entry-order check exactly as a larger tag written ahead
+of a smaller one does. It is said once for the directory rather than once for
+the entry that gave it away, and ahead of everything else that directory has to
+say -- even ahead of an unnamed-field warning for an entry that comes first:
+
+    TIFFReadDirectoryCheckOrder: Warning, Invalid TIFF directory; tags are not
+    sorted in ascending order.
+
+Two directories that both descend get a warning each, and `-verboseinfo` says
+the same thing `-info` does. `-dump` walks the raw IFD itself and says nothing,
+and neither does a conversion.
+
+Because only the first entry for a tag is ever set, the entries after it are
+never acted on at all, and every complaint about a tag is made where its first
+entry sits. An unnamed field listed twice draws one warning, not two, and two
+different unnamed tags whose copies interleave warn in the order their *first*
+entries sit -- 347 then 348 for entries 347, 348, 347, 348. A field that is
+turned down behaves the same way, which is why the value named is the first
+entry's and not the last: FillOrder 0 then 2 warns once and says nothing about
+the 2, while FillOrder 2 then 0 says nothing at all, because a good value is
+never replaced by a bad one that follows it.
+
+`-dump` is the exception, because it is reporting entries rather than fields. Each
+line shows the entry it is standing on, so a tag listed twice prints its own
+value on each of the two lines instead of the first value twice.
+
+**Two entries that disagree cost the image.** A tag listed twice whose entries
+carry different values leaves the reference tool unable to make sense of the
+directory: `-none` reports success and writes a zero-length file, the same
+failure as a hard refusal. A tag listed twice whose entries agree is harmless,
+and so is a directory that merely descends. Which of the two disagreeing values
+is believed makes no difference -- a good value followed by a bad one loses the
+image just as the other way round does -- because the first entry is the one
+that is set and the second is ignored, but the duplicate itself is enough to
+cost the image. This port writes the image through instead, so those cases
+compare everything but the output bytes (`check_nobytes ./o.tiff`).
+
 Still open, and therefore *not* pinned down by anything in this file:
 
-- A tag listed twice in one directory is refused by the entry-order check, and
-  the reference tool says so before anything else:
-  `TIFFReadDirectoryCheckOrder: Warning, Invalid TIFF directory; tags are not
-  sorted in ascending order.` It then sets the tag once, so a tag that is
-  duplicated *and* refused draws its refusal once where this port draws it
-  twice, once per entry. Malformed input, and left alone here rather than
-  half-fixed; the harness has no fixture for it.
 - 16-bit LogLuv is converted rather than copied, and its conversion is still
   unknown. 8-bit YCbCr Photometric 6 is converted too, and is now reproduced;
   see the YCbCr note above for the model and for the residuals it leaves.

@@ -322,8 +322,13 @@ check() {
     [ "$fl" = "$fm" ] || why="$why files[$fl|$fm]"
 
     # Compare the bytes of every fixture and every produced file.  Null-safe so
-    # that names containing spaces are handled.
+    # that names containing spaces are handled.  A file named in SKIP_BYTES is
+    # still required to exist and to be listed, but its contents are not
+    # compared: see check_nobytes below.
     while IFS= read -r -d '' f; do
+        case " ${SKIP_BYTES-} " in
+            *" $f "*) continue ;;
+        esac
         cmp -s "$o/$f" "$m/$f" || why="$why bytes:$f"
     done < <( cd "$o" && find . -type f ! -name 'o.out' ! -name 'o.err' \
         -print0 )
@@ -352,11 +357,36 @@ check_nostatus() {
     SKIP_STATUS=1 check "$@"
 }
 
+# For the inputs the reference tool opens badly enough that its output file is
+# worthless: it reports "1 image written" and leaves a zero-length file behind,
+# because the conversion had already lost the image.  The file has to be there
+# and has to be listed, but its bytes are not compared -- we write the image
+# through instead of losing it, and that difference is deliberate.
+check_nobytes() {
+    local skip="$1"; shift
+    SKIP_BYTES="$skip" check "$@"
+}
+
 # Extra fixtures.  Each takes the case directory as $1.
 s_none()  { :; }
 s_text()  { echo "not an image" > "$1/junk.tiff"; }
 s_empty() { : > "$1/junk.tiff"; }
 s_dir()   { mkdir -p "$1/adir"; }
+# The shapes of "opened, and found not to be a TIFF".  Every byte is spelled in
+# octal so that no shell quoting decides what a null is.
+s_short1() { printf '\111'                > "$1/junk.tiff"; }
+s_short3() { printf '\111\111\052'        > "$1/junk.tiff"; }
+s_short4() { printf '\111\111\052\000'    > "$1/junk.tiff"; }
+s_bmagic() { printf '\130\131'            > "$1/junk.tiff"; }
+# A sound header and a version that is not 42.
+s_bver()   { printf '\111\111\053\000\010\000\000\000' > "$1/junk.tiff"; }
+# A sound header pointing at a directory that is not there, and at one that is
+# there but holds no entries.
+s_past()   { printf '\111\111\052\000\377\377\000\000' > "$1/junk.tiff"; }
+s_zerodir() { printf '\111\111\052\000\010\000\000\000\000\000\000\000\000' \
+    > "$1/junk.tiff"; }
+# A sound header pointing at nothing at all.
+s_noifd()  { printf '\111\111\052\000\000\000\000\000' > "$1/junk.tiff"; }
 s_b_same() { mktiff "$1/b.tiff" little "$G8SAME"; }
 s_b_diff() { mktiff "$1/b.tiff" little "$G8DIFF"; }
 # A second input, plus a name that is not a TIFF at all and one that is not
@@ -759,7 +789,11 @@ for setup in s_dt_4 s_sf_1 s_xs_1 s_td_8; do
 done
 for setup in s_sf_zero s_dt_four s_td_zero s_xs_three; do
     check "$setup dump refused" little "$G8W" "$setup" -- -dump i.tiff
-    check "$setup write refused" little "$G8W" "$setup" -- -none -out o.tiff i.tiff
+    # The reference tool loses the image here and writes an empty file while
+    # reporting success; we write the image through, so the output bytes are
+    # the one thing left out of the comparison.
+    check_nobytes ./o.tiff "$setup write refused" little "$G8W" "$setup" \
+        -- -none i.tiff -out o.tiff
 done
 check "g4src -extract 0"   little "$B1G"  s_g4 -- -extract 0 c.tiff -out o.tiff
 check "g4src -extract end" little "$MULTI" s_g4 -- -extract 3 c.tiff -out o.tiff
@@ -883,15 +917,47 @@ check "out before input" little "$G8W" s_none -- -none -out o.tiff i.tiff
 # -info is deliberately absent from the unreadable-input cases below.  The
 # reference tool dereferences a null image source and dies with SIGSEGV (rc 139)
 # on every one of them -- a missing file, a non-TIFF, an empty file, a
-# directory.  Reproducing a crash is not a parity target, so those four are not
-# compared at all.  -dump and the write operations survive the same inputs and
-# are compared normally.
+# directory.  Reproducing a crash is not a parity target, so only the exit
+# status is left out of those four, via check_nostatus: both streams byte for
+# byte, the files present and the fixture bytes still have to match.
 check "missing source"      little "$G8W" s_none  -- -none nope.tiff
 check "missing source dump" little "$G8W" s_none  -- -dump nope.tiff
 check "not an image"        little "$G8W" s_text  -- -none junk.tiff
 check "empty file"          little "$G8W" s_empty -- -none junk.tiff
 check "empty file dump"     little "$G8W" s_empty -- -dump junk.tiff
 check "directory as source" little "$G8W" s_dir   -- -none adir
+
+# Every shape of a failed open is run through all three ways of looking at one.
+# The reports crash on the reference tool and -dump and the write operations do
+# not, so the two families differ in how much is compared rather than in what
+# is checked.
+allops() {
+    local setup="$1" src="$2" label="$3"
+
+    check_nostatus "$label report"  little "$G8W" "$setup" -- -info "$src"
+    check_nostatus "$label vreport" little "$G8W" "$setup" -- -verboseinfo "$src"
+    check          "$label dump"    little "$G8W" "$setup" -- -dump "$src"
+    check          "$label write"   little "$G8W" "$setup" -- -none "$src" -out o.tiff
+    check          "$label extract" little "$G8W" "$setup" -- -extract 0 "$src" -out o.tiff
+}
+allops s_none junk.tiff "missing"
+allops s_dir  adir      "directory"
+for setup in s_text s_empty s_short1 s_short3 s_short4 s_bmagic s_bver \
+             s_past s_zerodir s_noifd; do
+    allops "$setup" junk.tiff "${setup#s_}"
+done
+
+# A file that is there but cannot be read is told apart from one that is not a
+# TIFF, and named rather than called malformed.  Root ignores the mode, so the
+# case only means anything when the suite is not run as root -- and neither
+# tool can read the file back afterwards, so its bytes are left out.
+s_noperm() { mktiff "$1/junk.tiff" little "$G8W"; chmod 000 "$1/junk.tiff"; }
+if [ "$(id -u)" != 0 ]; then
+    SKIP_STATUS=1 check_nobytes ./junk.tiff "unreadable report"  little "$G8W" s_noperm -- -info junk.tiff
+    SKIP_STATUS=1 check_nobytes ./junk.tiff "unreadable vreport" little "$G8W" s_noperm -- -verboseinfo junk.tiff
+    check_nobytes ./junk.tiff "unreadable dump"  little "$G8W" s_noperm -- -dump junk.tiff
+    check_nobytes ./junk.tiff "unreadable write" little "$G8W" s_noperm -- -none junk.tiff -out o.tiff
+fi
 
 # --- cat family --------------------------------------------------------------
 # Each spelling over a plain source, and with the default output name.

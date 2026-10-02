@@ -250,9 +250,10 @@ tiff_close(tiff_t *t)
 }
 
 /*
- * Parse a TIFF held in memory.  Returns 0 on success.  On the failure paths
- * the reference tool's own libtiff warnings are reproduced, because the
- * harness compares stderr.
+ * Parse a TIFF held in memory.  Returns 0 on success.  On failure it records
+ * which way it went wrong and says nothing: the reference tool names the
+ * failure differently in -info, in -dump and in the write operations, so the
+ * caller that knows which one is running does the wording.
  */
 int
 tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
@@ -262,23 +263,27 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 
 	memset(t, 0, sizeof(*t));
 	if (len < 8) {
-		tu_warn("TIFFOpen: not a TIFF file.\n");
-		return -1;
+		t->openerc = TUFF_EHEADER;
+		return TUFF_EHEADER;
 	}
 	if (data[0] == 'M' && data[1] == 'M')
 		be = 1;
 	else if (data[0] == 'I' && data[1] == 'I')
 		be = 0;
 	else {
-		if (tu_chatter)
-			tu_warn("TIFFOpen: Unknown image file format.\n");
-		return -1;
+		/* The magic is reported as the little-endian value of the two
+		 * bytes whichever order the file claims, and neither "II" nor
+		 * "MM" read that way, which is why the order it claims is
+		 * never mentioned. */
+		t->badmagic = (uint32_t)((data[1] << 8) | data[0]);
+		t->openerc = TUFF_EMAGIC;
+		return TUFF_EMAGIC;
 	}
+	/* A version that is not 42 is reported as a header that could not be
+	 * read, with no mention of the version. */
 	if (rd_be16(data + 2, be) != 42) {
-		if (tu_chatter)
-			tu_warn("TIFFOpen: Not a TIFF file, bad version number %u.\n",
-			    (unsigned)rd_be16(data + 2, be));
-		return -1;
+		t->openerc = TUFF_EHEADER;
+		return TUFF_EHEADER;
 	}
 
 	t->be = be;
@@ -295,19 +300,23 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 		uint32_t *dirs;
 
 		if (off + 2 > len) {
-			tu_warn("TIFFReadDirectory: Failed to read directory at offset %u.\n", off);
-			return -1;
+			t->diroff = off;
+			t->dirwhy = TUDIR_COUNT;
+			t->openerc = TUFF_EDIRS;
+			return TUFF_EDIRS;
 		}
 		n = rd_be16(t->data + off, be);
 		if (n == 0) {
-			tu_warn("TIFFFetchDirectory: Sanity check on directory count failed, "
-			    "zero tag directories not supported.\n");
-			tu_warn("TIFFReadDirectory: Failed to read directory at offset %u.\n", off);
-			return -1;
+			t->diroff = off;
+			t->dirwhy = TUDIR_ZERO;
+			t->openerc = TUFF_EDIRS;
+			return TUFF_EDIRS;
 		}
 		if (off + 2 + (size_t)n * 12 + 4 > len) {
-			tu_warn("TIFFReadDirectory: Failed to read directory at offset %u.\n", off);
-			return -1;
+			t->diroff = off;
+			t->dirwhy = TUDIR_COUNT;
+			t->openerc = TUFF_EDIRS;
+			return TUFF_EDIRS;
 		}
 		ents = calloc(n, sizeof(*ents));
 		if (ents == NULL)
@@ -345,15 +354,17 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 			t->ents[t->ndir++] = ents;
 		}
 		if (t->ndir > 4096) {
-			tu_warn("TIFFReadDirectory: Failed to read directory at offset %u.\n", off);
-			return -1;
+			t->diroff = off;
+			t->dirwhy = TUDIR_COUNT;
+			t->openerc = TUFF_EDIRS;
+			return TUFF_EDIRS;
 		}
 		next = rd_be32(t->data + off + 2 + (size_t)n * 12, be);
 		off = next;
 	}
 	if (t->ndir == 0) {
-		tu_warn("TIFFOpen: Empty TIFF file.\n");
-		return -1;
+		t->openerc = TUFF_ENODIRS;
+		return TUFF_ENODIRS;
 	}
 
 	/* Resolve each directory's own strip table; -info and -verboseinfo both
@@ -401,12 +412,79 @@ tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len)
 	return 0;
 }
 
-int tu_chatter;
-
+/* The reference tool blames a failed open in its own words, and picks a
+ * different set for each operation.  -info names the file it was handed and
+ * leaves a full stop on every line; -dump names a null path, drops the full
+ * stop on a name it has, and phrases a directory that stops short of the
+ * header differently again.  The write operations name none of it at all,
+ * which is why only the reporting modes call this.
+ */
 void
-tu_set_chatter(int on)
+tu_report_open_reason(const tiff_t *t, const char *path, int fmt)
 {
-	tu_chatter = on;
+	switch (t->openerc) {
+	case TUFF_ENOENT:
+		if (fmt == TUFMT_DUMP)
+			fprintf(stderr, "%s: %s\n", path,
+			    strerror(ENOENT));
+		else
+			fprintf(stderr, "TIFFOpen: %s: %s.\n", path,
+			    strerror(ENOENT));
+		break;
+	case TUFF_EOPEN:
+		if (fmt == TUFMT_DUMP)
+			fprintf(stderr, "%s: %s\n", path,
+			    strerror(t->openerrno));
+		else
+			fprintf(stderr, "TIFFOpen: %s: %s.\n", path,
+			    strerror(t->openerrno));
+		break;
+	case TUFF_EMAGIC:
+		if (fmt == TUFMT_DUMP)
+			fprintf(stderr, "(null): Not a TIFF or MDI file, "
+			    "bad magic number %u (0x%x).\n",
+			    (unsigned)t->badmagic, (unsigned)t->badmagic);
+		else
+			fprintf(stderr, "%s: Not a TIFF or MDI file, bad "
+			    "magic number %u (0x%x).\n", path,
+			    (unsigned)t->badmagic, (unsigned)t->badmagic);
+		break;
+	case TUFF_EDIRS:
+		if (fmt == TUFMT_DUMP)
+			fprintf(stderr, "(null): %s.\n",
+			    t->dirwhy == TUDIR_ZERO ?
+			    "No space for TIFF directory" :
+			    "Error while reading directory count");
+		else {
+			if (t->dirwhy == TUDIR_ZERO)
+				tu_warn("TIFFFetchDirectory: Sanity check "
+				    "on directory count failed, zero tag "
+				    "directories not supported.\n");
+			else
+				tu_warn("TIFFFetchDirectory: Can not read "
+				    "TIFF directory count.\n");
+			tu_warn("TIFFReadDirectory: Failed to read "
+			    "directory at offset %u.\n",
+			    (unsigned)t->diroff);
+		}
+		break;
+	case TUFF_EDIR:
+	case TUFF_EHEADER:
+		/* A directory is a header that cannot be read, and a version
+		 * that is not 42 is blamed the same way, with no mention of
+		 * the version. */
+		if (fmt == TUFMT_DUMP)
+			fprintf(stderr, "(null): Error while reading TIFF "
+			    "header.\n");
+		else
+			fprintf(stderr, "%s: Cannot read TIFF header.\n",
+			    path);
+		break;
+	default:
+		/* A file with a sound header and no directories is not
+		 * blamed at all: the report simply finds nothing to show. */
+		break;
+	}
 }
 
 int
@@ -422,27 +500,22 @@ tiff_open_file(tiff_t *t, const char *path)
 	int rc;
 	struct stat st;
 
-	/* A directory opens successfully but never reads. The reference tool
+	/* A directory opens successfully but never reads.  The reference tool
 	 * words that the same way as a file that is not there at all. */
 	if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-		t->openerc = TUFF_ENOENT;
-		return TUFF_ENOENT;
+		t->openerc = TUFF_EDIR;
+		return TUFF_EDIR;
 	}
 
 	f = fopen(path, "rb");
 	if (f == NULL) {
+		t->openerrno = errno;
 		if (errno == ENOENT) {
 			t->openerc = TUFF_ENOENT;
 			return TUFF_ENOENT;
 		}
-		if (tu_chatter) {
-			fprintf(stderr, "TIFFOpen: %s: ", path);
-			fprintf(stderr, "%s.\n", strerror(errno));
-			fprintf(stderr, "Error: Can't open %s. Either it isn't "
-			    "readable, it isn't a TIFF file, or there are "
-			    "unrecognized tags; try tiffutil -dump for more "
-			    "info.\n", path);
-		}
+		/* Present but unreadable: a permission problem rather than a
+		 * malformed TIFF, and told apart from one. */
 		t->openerc = TUFF_EOPEN;
 		return TUFF_EOPEN;
 	}
@@ -466,22 +539,17 @@ tiff_open_file(tiff_t *t, const char *path)
 	}
 	fclose(f);
 	if (len == 0) {
-		/* A zero-length file is readable, it just is not a TIFF, so it
-		 * belongs with the other malformed inputs rather than with the
-		 * ones that could not be read at all. The caller words the two
-		 * cases differently. */
+		/* A zero-length file is readable, it just is not a TIFF: there
+		 * is not even a header to blame, which is what the reference
+		 * reports. */
 		free(data);
-		t->openerc = TUFF_EOPEN;
-		return TUFF_EOPEN;
+		t->openerc = TUFF_EHEADER;
+		return TUFF_EHEADER;
 	}
+	/* tiff_open_mem copies what it keeps and has already recorded which way
+	 * it failed, saying nothing about it. */
 	rc = tiff_open_mem(t, data, len);
 	free(data);
-	if (rc < 0) {
-		/* Readable, but not a TIFF: the same class as a zero-length
-		 * file, so the caller words it the same way. */
-		t->openerc = TUFF_EOPEN;
-		return TUFF_EOPEN;
-	}
 	return rc;
 }
 

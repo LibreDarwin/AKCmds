@@ -278,6 +278,14 @@ tu_cmd_info(const char *path, int verbose)
 	uint32_t v;
 
 	if (tiff_open_file(&t, path) < 0) {
+		/* A file that could not be opened is blamed in the
+		 * reference tool's own words first, and then refused.  A
+		 * sound header with no directories in it is blamed for
+		 * nothing at all: the report simply finds nothing to show. */
+		tu_report_open_reason(&t, path, TUFMT_INFO);
+		fprintf(stderr, "Error: Can't open %s. Either it isn't "
+		    "readable, it isn't a TIFF file, or there are unrecognized "
+		    "tags; try tiffutil -dump for more info.\n", path);
 		tiff_close(&t);
 		return -1;
 	}
@@ -605,6 +613,16 @@ tu_cmd_info(const char *path, int verbose)
 	return 0;
 }
 
+/* A header the reference tool did manage to read is shown whatever became
+ * of the directories after it. */
+static void
+dump_header(const tiff_t *t)
+{
+	printf("Magic: 0x%02x%02x <%s-endian> Version: 0x%x <ClassicTIFF>\n",
+	    t->data[0], t->data[1], t->be ? "big" : "little",
+	    (unsigned)rd_be16(t->data + 2, t->be));
+}
+
 int
 tu_cmd_dump(const char *path)
 {
@@ -612,24 +630,26 @@ tu_cmd_dump(const char *path)
 	uint32_t off;
 
 	if (tiff_open_file(&t, path) < 0) {
-		int rc, openerc = t.openerc;
+		/* A sound header holding no directories is not a failure:
+		 * the reference tool prints the header and stops.  Whether it
+		 * did has to be read before the close, which clears it. */
+		int rc = t.openerc == TUFF_ENODIRS ? 0 : 1;
 
-		tiff_close(&t);
-		/* A file that could not be read is reported by name and still
-		 * exits 0. A file that was read but is not a TIFF is reported
-		 * against a null name -- the reference tool formats a path it
-		 * never got -- and does exit non-zero. */
-		if (openerc == TUFF_ENOENT) {
-			fprintf(stderr, "%s: %s\n", path, strerror(ENOENT));
+		/* A file that could not be read at all is named, and unlike
+		 * every other failure here it still exits 0. */
+		if (t.openerc == TUFF_ENOENT || t.openerc == TUFF_EOPEN) {
+			tu_report_open_reason(&t, path, TUFMT_DUMP);
+			tiff_close(&t);
 			return 0;
 		}
-		fprintf(stderr, "(null): Error while reading TIFF header.\n");
-		rc = 1;
+		if (t.openerc != TUFF_ENODIRS)
+			tu_report_open_reason(&t, path, TUFMT_DUMP);
+		if (t.data != NULL)
+			dump_header(&t);
+		tiff_close(&t);
 		return rc;
 	}
-	printf("Magic: 0x%02x%02x <%s-endian> Version: 0x%x <ClassicTIFF>\n",
-	    t.data[0], t.data[1], t.be ? "big" : "little",
-	    (unsigned)rd_be16(t.data + 2, t.be));
+	dump_header(&t);
 
 	off = rd_be32(t.data + 4, t.be);
 	for (int d = 0; d < t.ndir && off; d++) {

@@ -24,6 +24,10 @@ typedef struct {
 
 typedef struct {
 	int openerc;                  /* TUFF_* from the last open attempt */
+	int openerrno;                /* errno from the failed open, if any */
+	uint32_t badmagic;            /* the magic number that was not II or MM */
+	uint32_t diroff;              /* offset of the directory that failed */
+	int dirwhy;                   /* TUDIR_* for why the walk stopped */
 	int be;                       /* big-endian when set */
 	unsigned char *data;
 	size_t len;
@@ -42,15 +46,32 @@ uint32_t rd_be32(const unsigned char *p, int be);
 
 int tiff_cat(const char *const *paths, int npaths, const char *outpath);
 int tiff_open_mem(tiff_t *t, const unsigned char *data, size_t len);
-extern int tu_chatter;
-void tu_set_chatter(int on);
 
 #define TYPE_UNDEFINED 7
 
-#define TUFF_ENOENT (-2)
-#define TUFF_EOPEN  (-1)
+/* Why an open failed.  The reference tool words each of these differently in
+ * -info, in -dump, and in the write operations, so the open layer classifies
+ * the failure and leaves the wording to the caller. */
+#define TUFF_OK      0
+#define TUFF_ENOENT  (-2)         /* not there at all */
+#define TUFF_EDIR    (-3)         /* a directory */
+#define TUFF_EOPEN   (-1)         /* there, but not openable */
+#define TUFF_EHEADER (-4)         /* too short for a header, or bad version */
+#define TUFF_EMAGIC  (-5)         /* magic is neither II nor MM */
+#define TUFF_EDIRS   (-6)         /* header fine, the directory walk failed */
+#define TUFF_ENODIRS (-7)         /* header fine, but no directories at all */
+
+/* Why the directory walk stopped, for TUFF_EDIRS. */
+#define TUDIR_NONE  0
+#define TUDIR_COUNT 1             /* could not read the entry count */
+#define TUDIR_ZERO  2             /* count of zero entries */
+
+/* Which wording of the failure the caller wants. */
+#define TUFMT_INFO 0              /* -info and -verboseinfo */
+#define TUFMT_DUMP 1              /* -dump */
 
 int tiff_open_file(tiff_t *t, const char *path);
+void tu_report_open_reason(const tiff_t *t, const char *path, int fmt);
 void tiff_close(tiff_t *t);
 void tiff_sort_entries(tiff_t *t);
 

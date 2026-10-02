@@ -621,10 +621,13 @@ report_missing_source(const char *path)
 	    "tags; try tiffutil -dump for more info.\n", path);
 }
 
+/* The reference tool says nothing about *why* an input was refused in the
+ * write operations: only the refusal itself is reported, and only a file
+ * that is not there at all is named as missing. */
 static int
 report_open_failure(const tiff_t *t, const char *path, const char *blame)
 {
-	if (t->openerc == TUFF_ENOENT) {
+	if (t->openerc == TUFF_ENOENT || t->openerc == TUFF_EDIR) {
 		report_missing_source(path);
 		fprintf(stderr, "Error: Can't read from file %s.\n", blame);
 		fprintf(stderr, "No output file created due to errors.\n");
@@ -849,7 +852,7 @@ cat_operations(int op, char **paths, int npaths, const char *outpath)
 			 * means nothing gets written.  The diagnostics for
 			 * the passed-over names come out after the size
 			 * report, so they are held until then. */
-			if (t.openerc == TUFF_EOPEN) {
+			if (t.openerc != TUFF_ENOENT && t.openerc != TUFF_EDIR) {
 				const char **ns = realloc(skipped,
 				    (size_t)(nskip + 1) * sizeof(*ns));
 
@@ -1006,7 +1009,6 @@ run_reports(int op, int argc, char **argv, int first)
 {
 	int i, rc = 0;
 
-	tu_set_chatter(1);
 	for (i = first; i < argc; i++) {
 		int r;
 

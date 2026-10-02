@@ -224,17 +224,62 @@ page the reference has just re-encoded carries consistent tags.
     two commands                                  1  "Error: One input file name expected."
     -extract N beyond the last image              5  "Error: F has only M image." +
                                                       "No output file created due to errors."
-    unreadable/missing input                       0* "TIFFOpen: F: No such file or directory." +
-                                                      "Error: Can't open F. ..."
 
-* `tiffutil -info nosuch.tif` **segfaults** (rc 139) after printing a correct
-  error. So does `-info` against a non-TIFF, an empty file, or a directory --
-  every unreadable input, in fact, because the image source is null when the
-  report is formatted. `-dump` and the write operations survive the same
-  inputs. A clean-room reimplementation must not reproduce a crash; the
-  message and a non-zero status are reproduced instead. This is a deliberate,
-  documented divergence, and those four cases are excluded from the harness
-  rather than compared.
+### A failed open is worded three different ways
+
+The same unreadable input gets a different diagnostic in every mode, so the
+open layer classifies the failure and the caller doing the reporting chooses
+the words. The shapes, and what each mode says about them:
+
+| input | `-info` / `-verboseinfo` | `-dump` | write ops |
+|---|---|---|---|
+| not there | `TIFFOpen: F: No such file or directory.` | `F: No such file or directory` (rc 0) | `Error: Failed to create image source for file F.` + `Error: Can't read from file B.` |
+| not readable | `TIFFOpen: F: Permission denied.` | `F: Permission denied` (rc 0) | `Error: Can't open F. ...` |
+| a directory | `F: Cannot read TIFF header.` | `(null): Error while reading TIFF header.` | as "not there" |
+| under 8 bytes | `F: Cannot read TIFF header.` | `(null): Error while reading TIFF header.` | `Error: Can't open F. ...` |
+| version ≠ 42 | `F: Cannot read TIFF header.` | `(null): Error while reading TIFF header.` | `Error: Can't open F. ...` |
+| magic not II/MM | `F: Not a TIFF or MDI file, bad magic number N (0xH).` | `(null): Not a TIFF or MDI file, ...` | `Error: Can't open F. ...` |
+| header fine, no directories | *nothing* | header only, rc 0 | `Error: Can't open F. ...` |
+| directory walk fails | `TIFFFetchDirectory: ...` + `TIFFReadDirectory: Failed to read directory at offset N.` | header, then `(null): Error while reading directory count.` or `(null): No space for TIFF directory.` | `Error: Can't open F. ...` |
+
+Three things are easy to get wrong and all three were measured:
+
+- **The magic is the little-endian value of the two bytes**, whichever order
+  the file claims. `XY` (0x58 0x59) is reported as `22872 (0x5958)`, not
+  `22617 (0x5859)`.
+- **The reports name the file they were given; `-dump` names `(null)`.** So
+  `-dump` of a bad magic prints `(null): Not a TIFF...` while `-info` of the
+  same file prints `F: Not a TIFF...`.
+- **The write operations name nothing at all.** They print only the refusal
+  itself — no `TIFFOpen:` line, no `TIFFFetchDirectory:` line — so any
+  diagnostic emitted during a write is wrong. Only a file that is not there at
+  all is named, as `Failed to create image source for file F.`
+
+`-dump` shows a header it managed to read even when the directory walk is what
+failed, and reports a sound header with no directories as a **success** (rc 0).
+`-info` blames nothing for the same file: it just cannot open it.
+
+The `-info` and `-verboseinfo` refusal line is a *third* wording, with one
+extra clause: `Either it isn't readable, it isn't a TIFF file, or there are
+unrecognized tags`. The write operations leave `isn't readable` out.
+
+### Divergences on this path, both deliberate
+
+1. `-info` and `-verboseinfo` **segfault** (rc 139) on every unreadable input --
+   a missing file, a non-TIFF, an empty file, a directory -- because the image
+   source is null when the report is formatted. Reproducing a crash is not a
+   parity target, so the same messages and a clean non-zero status are emitted
+   instead. The harness drops only the exit status for those cases
+   (`check_nostatus`) and still compares both streams, the files present and the
+   fixture bytes.
+
+2. When a tag is refused hard enough to lose the image (see below), the write
+   operations report `1 image written to F.` and exit 0 while leaving a
+   **zero-length file** behind. Re-running that write destroys the image
+   silently, which is why it is not reproduced: the port writes the image
+   through. `check_nobytes` keeps those cases in the harness with the output
+   bytes left out -- the file must still be created and listed, and both
+   streams and the exit status still have to match.
 
 Other details:
 
@@ -243,6 +288,10 @@ Other details:
   stdout. Nothing is ever written to stdout on a successful write. Found by
   tests/tiffutil-parity.sh, which compares the two streams separately; every
   earlier ad-hoc check folded them together with `2>&1` and so missed it.
+- `-out` is positional, not a flag: it must come **after** the input name.
+  `tiffutil -none -out o.tiff i.tiff` is a usage error, and a test written that
+  way silently compares two usage errors instead of the thing it meant to test.
+  Four harness cases were vacuous for exactly this reason.
 - An existing output file is overwritten silently.
 - `-extract 0` succeeds and writes a file.
 - `-extract` keeps the source directory's compression rather than rewriting
@@ -352,8 +401,17 @@ The walk stops at the *first* refusal in a directory, so with both 32996 and
 339 out of range only the one the entries reach first is named. The two lines
 come after that directory's unknown-field warnings, as with the softer family.
 Nothing reaches stdout -- not even the directory heading, and not the lines for
-directories before this one. `-dump` and the write operations read the same
-files without complaint, so the refusal is confined to `-info`/`-verboseinfo`.
+directories before this one. `-dump` reads the same files without complaint, so
+the *diagnostic* is confined to `-info`/`-verboseinfo`.
+
+**The write operations are not unaffected, though.** A file refused this hard
+loses its image, and `-none` on one prints `1 image written to F.` and exits 0
+while leaving a **zero-length file** behind -- the conversion had already lost
+the source. The softer family (33996/33998/338 at 0-2, and 266 at 0) does not
+do this: those files convert normally and come out byte-identical. The port
+writes the image through rather than reproducing the data loss, so those four
+harness cases keep everything but the output bytes (`check_nobytes`). See the
+second divergence under *Diagnostics and exit codes*.
 
 **ExtraSamples names the count, not the element.** It is a list, so it is
 refused when any element is out of range, but the number in the complaint is the

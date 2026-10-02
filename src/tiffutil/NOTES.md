@@ -569,17 +569,42 @@ Still open, and therefore *not* pinned down by anything in this file:
   conversion -- whereas the same buffer at compression 34676 comes back
   black.
 
-  Past that, hand-written samples decode to noise and no alignment can be
-  established: `[A,A]` and `[A,B]` agree on their first pixel and differ on
-  nothing, and two identical input pixels produce two different output pixels,
-  in both the 4-byte and the 6-byte layout. That is the signature of a decoder
-  consuming a bit stream rather than bytes, so the layout is whatever an SGILOG
-  encoder emits and no arrangement of bytes reaches it. Building a fixture needs
-  that encoder, which neither the reference nor this port has; the harness has
-  no LogLuv file, and the white fill in `main.c` is a placeholder rather than a
-  measurement. Getting an encoder first -- libtiff built with `logluv=ON` can
-  write the format -- is the next step, and the conversion can then be measured
-  off the reference tool as usual.
+  Past that, hand-written samples decode to noise, and the reason is worth
+  having written down: the strip is not samples at all. It is a run-length
+  string per bit plane, so a row begins with a control byte and every layout
+  that writes samples directly lands somewhere the decoder never looks. That
+  is the signature seen here -- `[A,A]` and `[A,B]` agree everywhere, and two
+  identical input pixels give two different output pixels, in the 4-byte and
+  the 6-byte layout alike. The encoding, from `tif_luv.c`:
+
+      for each bit plane, high byte then low byte
+        control byte >= 128   a run of (control - 126) pixels, then the value
+        control byte 1..127   that many literal bytes follow
+        control byte 0        nothing
+      runs only pay off from 4 pixels up
+
+  The arithmetic on the far side of that is settled and portable, and worth
+  recording so it need not be measured again:
+
+      Y = 2^((Le + 0.5)/256 - 64), Le = L & 0x7fff, sign in bit 15
+      r =  2.690 X - 1.276 Y - 0.414 Z      each clamped to 0..255 by
+      g = -1.022 X + 1.978 Y + 0.044 Z      (int)(256 * sqrt(c)) for c in
+      b =  0.061 X - 0.224 Y + 1.163 Z      (0,1), else 0 or 255
+
+  -- CCIR-709 primaries and a plain 2.0 gamma, no colour management anywhere.
+
+  What is not settled is the layout, and libtiff's own answer is the wrong
+  shape to copy: its `SGILOGDATAFORMAT_16BIT` is 2 bytes a pixel, luminance
+  only, whereas the reference tool emits three samples and refuses a one-sample
+  file outright. So the two do not agree, and building a fixture by porting
+  libtiff's encoder would encode the wrong thing.
+
+  The way out is a fixture written by something that already knows the format.
+  libtiff built with `logluv=ON` can write LogLuv, and the reference's own
+  `bootstrap-libtiff.sh` builds exactly that -- which is the next step, and it
+  is a clone and a build rather than a measurement. The harness has no LogLuv
+  file, and the white fill in `main.c` is a placeholder rather than a
+  measurement, until one exists.
 - 8-bit YCbCr Photometric 6 is converted too, and is now reproduced; see the
   YCbCr note above for the model and for the residuals it leaves.
 - The Lab profile carries a build timestamp, so a byte comparison only holds

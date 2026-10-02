@@ -492,9 +492,13 @@ tiff_predictor_for(int compression, uint32_t bps)
 /* The Lab profile is rebuilt per image and carries the moment it was made, so
  * the template's zeroed date field is filled in here.  The ICC header spells
  * the date out as six 16-bit big-endian numbers: year, month, day, hour,
- * minute, second.  The profile is written as UTC, as the specification says,
- * which cannot be checked against the reference on a host whose local time
- * happens to be UTC; see NOTES.md. */
+ * minute, second.
+ *
+ * Those are *local* wall-clock values, not UTC.  The specification asks for
+ * UTC, and using gmtime_r here matched the reference for as long as the host
+ * was on GMT -- which is how it survived unexamined.  Running the reference
+ * under TZ=America/New_York settles it: it stamps the same wall clock as
+ * TZ says, four hours behind UTC in October.  See NOTES.md. */
 static void
 tiff_stamp_lab(unsigned char *p)
 {
@@ -503,7 +507,7 @@ tiff_stamp_lab(unsigned char *p)
 	uint16_t v[6];
 	int i;
 
-	if (gmtime_r(&now, &tm) == NULL)
+	if (localtime_r(&now, &tm) == NULL)
 		return;
 	v[0] = (uint16_t)tm.tm_year + 1900;
 	v[1] = (uint16_t)tm.tm_mon + 1;

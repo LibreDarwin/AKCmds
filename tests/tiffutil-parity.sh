@@ -271,6 +271,65 @@ open(path, 'wb').write(bytes(body))
 PYEOF
 }
 
+# icctag <file> get   -- print one line per stamped profile, as local epoch secs.
+#                        Templates that were never stamped print nothing.
+# icctag <file> zero  -- overwrite every profile's date with zeros.
+# Both exit non-zero when the file carries no ICC profile at all.
+#
+# The date is six big-endian 16-bit numbers at offset 24 of the profile: year,
+# month, day, hour, minute, second.  A Lab output carries the moment it was
+# written there, so any two runs seconds apart differ in exactly those bytes.
+# See NOTES.md for why that is local wall clock and not UTC.
+#
+# Every directory in the file is walked, not just the first: a multi-page image
+# gets one profile per page and each is stamped on its own, so leaving the later
+# ones alone makes the comparison flaky exactly when a run straddles a second.
+icctag() {
+    python3 - "$1" "$2" <<'PYEOF'
+import struct, sys, datetime
+
+path, mode = sys.argv[1], sys.argv[2]
+tsize = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4}
+d = bytearray(open(path, 'rb').read())
+if len(d) < 8:
+    sys.exit(1)
+e = '<' if d[:2] == b'II' else '>'
+if struct.unpack_from(e + 'H', d, 2)[0] != 42:
+    sys.exit(1)
+off = struct.unpack_from(e + 'I', d, 4)[0]
+seen = set()
+found = False
+changed = False
+while off and off not in seen and off + 2 <= len(d):
+    seen.add(off)
+    n = struct.unpack_from(e + 'H', d, off)[0]
+    for i in range(n):
+        p = off + 2 + i * 12
+        if p + 12 > len(d):
+            break
+        tag, typ, cnt = struct.unpack_from(e + 'HHI', d, p)
+        if tag != 34675 or cnt * tsize.get(typ, 1) <= 4:
+            continue
+        vo = struct.unpack(e + 'I', bytes(d[p + 8:p + 12]))[0]
+        if vo + 36 > len(d):
+            continue
+        found = True
+        y, mo, dy, h, mi, s = struct.unpack_from('>6H', d, vo + 24)
+        if mode == 'zero':
+            d[vo + 24:vo + 36] = b'\0' * 12
+            changed = True
+        elif (y, mo, dy, h, mi, s) != (0,) * 6:
+            try:
+                print(int(datetime.datetime(y, mo, dy, h, mi, s).timestamp()))
+            except ValueError:
+                sys.exit(1)
+    off = struct.unpack_from(e + 'I', d, off + 2 + n * 12)[0]
+if mode == 'zero' and changed:
+    open(path, 'wb').write(bytes(d))
+sys.exit(0 if found else 1)
+PYEOF
+}
+
 # check <label> <endian> <pages> <setup> -- <args...>
 #   endian : "little" or "big"
 #   pages  : space-separated page specs, or "-" for no fixture
@@ -315,6 +374,38 @@ check() {
     fi
     cmp -s "$o/o.out" "$m/o.out" || why="$why stdout"
     cmp -s "$o/o.err" "$m/o.err" || why="$why stderr"
+
+    # A Lab output carries the moment it was written in the twelve date bytes at
+    # offset 24 of its rebuilt ICC profile, so two runs seconds apart differ in
+    # exactly those bytes and a plain cmp would be flaky by construction.  ICC_DATE
+    # checks every stamp against the current clock first and then zeroes the field,
+    # so the other 484 bytes of each profile are still compared byte for byte.
+    # Checking the value rather than ignoring it is the point: it is what catches
+    # a stamp written in the wrong timezone, which a mask alone would hide.
+    local stamp stamp_a stamp_b now
+    if [ -n "${ICC_DATE-}" ]; then
+        now=$(date +%s)
+        local sf
+        while IFS= read -r -d '' sf; do
+            stamp_a=$(icctag "$o/$sf" get) || continue
+            [ -n "$stamp_a" ] || continue
+            stamp_b=$(icctag "$m/$sf" get) || stamp_b=""
+            if [ -z "$stamp_b" ]; then
+                why="$why stamp:$sf"
+                continue
+            fi
+            # A multi-page file has one stamp per page, so every one of them has
+            # to be the current moment and not just the first.
+            for stamp in $stamp_a $stamp_b; do
+                if [ $((now - stamp)) -gt 5 ] || [ $((stamp - now)) -gt 5 ]; then
+                    why="$why stamp:$sf"
+                    break
+                fi
+            done
+            icctag "$o/$sf" zero && icctag "$m/$sf" zero
+        done < <( cd "$o" && find . -type f ! -name 'o.out' ! -name 'o.err' \
+            -print0 )
+    fi
 
     local fl fm
     fl=$( cd "$o" && find . -type f ! -name 'o.out' ! -name 'o.err' | sort )
@@ -365,6 +456,33 @@ check_nostatus() {
 check_nobytes() {
     local skip="$1"; shift
     SKIP_BYTES="$skip" check "$@"
+}
+
+# check, for a case whose output carries a CIELab profile.  Those are the only
+# files the reference stamps with the time, and the stamp is a *local* wall
+# clock, which is a question a masked comparison cannot answer on its own.
+check_lab() {
+    ICC_DATE=1 check "$@"
+}
+
+# check_lab with the zone forced, so the stamp is checked against a clock that is
+# not UTC.  gmtime_r instead of localtime_r passes every Lab case on a host that
+# happens to sit on UTC and fails all of them anywhere else, which means a suite
+# run in the default zone proves nothing about it.  These cases are what stop the
+# next timezone mistake from being invisible again.  TZ is restored afterwards so
+# the rest of the run keeps the caller's zone.
+check_lab_tz() {
+    local tz="$1" was_set=0 keep="$TZ"
+    [ -n "${TZ+x}" ] && was_set=1
+    TZ="$tz"
+    export TZ
+    check_lab "${@:2}"
+    if [ "$was_set" = 1 ]; then
+        TZ="$keep"
+        export TZ
+    else
+        unset TZ
+    fi
 }
 
 # Extra fixtures.  Each takes the case directory as $1.
@@ -758,6 +876,18 @@ HIDPI3="64,48,8,1,1 32,24,8,1,1 32,24,8,1,1"
 G8SAME="64,48,8,1,1"
 G8DIFF="32,24,8,1,1"
 
+# The three CIE Lab encodings.  All three come out as plain Lab (photometric 8),
+# and all three make the reference build its own profile rather than copy one,
+# which is the only output in this file that carries a build timestamp.
+LAB="16,16,8,3,8"
+LABW="64,48,8,3,8"                  # both dimensions even
+LABO="15,13,8,3,8"                  # both dimensions odd
+LAB16="16,16,16,3,8"                # 16-bit Lab under photometric 8
+LABI="16,16,8,3,9"                  # ICELab
+LABL="16,16,8,3,10"                 # ITULab
+LABSTRIP="40,40,8,3,8,1,1,8"        # multi-strip
+LABMULTI="16,16,8,3,8 32,32,8,3,8 8,8,8,3,8"
+
 # Samples narrower than a byte.  These arrive bit packed, are handed on one
 # sample to a byte, and so come out at eight bits: a palette's indices are
 # widened as they stand, while a real value is stretched over the whole range
@@ -840,6 +970,32 @@ done
 for shape in "$YCBCRW" "$YCBCR709"; do
     check "-none ycbcr BE $(printf '%s' "$shape" | tr ',' '-')" \
         big "$shape" s_none -- -none i.tiff -out o.tiff
+done
+
+# --- CIE Lab, the one output that carries the moment it was written ------------
+# The reference builds a 496-byte "Custom Lab Profile" per image rather than
+# copying a template, and stamps the current time into its date field.  check_lab
+# compares that value against the clock before zeroing it, so these cases verify
+# the stamp and the other 484 profile bytes together.
+for op in -none -lzw -packbits; do
+    for shape in "$LAB" "$LABW" "$LABO" "$LAB16" "$LABI" "$LABL" \
+                 "$LABSTRIP" "$LABMULTI"; do
+        check_lab "$op lab $(printf '%s' "$shape" | tr ',' '-')" \
+            little "$shape" s_none -- "$op" i.tiff -out o.tiff
+    done
+    check_lab "$op BE lab 64-48-8-3-8" big "$LABW" s_none \
+        -- "$op" i.tiff -out o.tiff
+done
+
+# The same two shapes again under zones that are not UTC, so that the stamp is
+# pinned to local time rather than merely agreeing with whatever zone the suite
+# happens to run in.  Kolkata is on a half hour and Kiritimati is a day ahead of
+# UTC, so neither can be faked by an hour-boundary slip.
+for tz in America/New_York Asia/Kolkata Pacific/Kiritimati; do
+    for shape in "$LAB" "$LAB16"; do
+        check_lab_tz "$tz" "$tz lab $(printf '%s' "$shape" | tr ',' '-')" \
+            little "$shape" s_none -- -none i.tiff -out o.tiff
+    done
 done
 
 # --- LogLuv, which is decoded into 32-bit float samples -------------------

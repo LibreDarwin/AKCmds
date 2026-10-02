@@ -786,9 +786,38 @@ The strip layout, on the other hand, is settled. It comes from the header
   easy to miss.
 - 8-bit YCbCr Photometric 6 is converted too, and is now reproduced; see the
   YCbCr note above for the model and for the residuals it leaves.
-- The Lab profile carries a build timestamp, so a byte comparison only holds
-  within a single second. Anything comparing Lab output needs synchronised
-  clocks or a deterministic time injection.
+- CIE Lab is reproduced for all three encodings, and the one thing about it that
+  no other output shares is that the reference builds a fresh 496-byte
+  "Custom Lab Profile" per image rather than copying a template, stamping the
+  moment it wrote it into the profile's date field. Two things follow, and both
+  were found by measurement rather than by reading the specification.
+
+  The stamp is **local wall clock, not UTC**. ICC says the header date is UTC
+  and `tiff_stamp_lab()` used `gmtime_r()` accordingly, which matched the
+  reference for as long as the host sat on GMT. Running the reference under
+  `TZ=America/New_York` settles it: it stamps the wall clock `TZ` names, four
+  hours behind UTC in October. `localtime_r()` is what the reference does, and
+  matching the reference is the job, so that is what the code does. A suite run
+  in a UTC zone cannot tell the two apart at all -- `gmtime_r` passes every Lab
+  case on this host and fails all of them in New York, Kolkata and Kiritimati --
+  so the harness now runs Lab cases under those three zones on purpose. Kolkata
+  is on a half hour and Kiritimati is a day ahead, so neither can be faked by an
+  hour-boundary slip.
+
+  And a multi-page image gets **one profile per page, each stamped
+  separately**, not one profile for the file. That matters for any byte
+  comparison: zeroing the first page's date and comparing leaves the later ones
+  live, which matches when both runs happen to land in the same second and fails
+  when they do not. It showed up only under the sanitizer, where a run is slow
+  enough to straddle a second boundary -- a flaky failure that a release build
+  hides, which is the worst kind to have in a comparison harness.
+
+  The Lab cases (27 shapes across the three encodings, both byte orders, a
+  multi-strip layout, a multi-directory file, and the six forced-zone runs)
+  check each stamp against the current clock and then zero it, so the other
+  484 bytes of every profile are still compared byte for byte. Masking the field
+  without checking its value would have been easier and would have hidden exactly
+  the bug above.
 - A third-party Group 4 stream using the extension code is not decoded.
 
 The reference tool segfaults on `-info`/`-verboseinfo` against a missing or

@@ -1086,6 +1086,15 @@ every case below, so the algorithm below is settled rather than provisional.
   solid one. The step only ever runs left, so this cannot catch a forward code.
   This is reachable without any damage -- an all-black reference line has no
   changing element at all, so every vertical-left code against it lands here.
+  The rest of the line is **not** filled in with the colour the line had reached:
+  the reference leaves the unpainted remainder of the row as it stands. That was
+  originally implemented as a fill, and it passed every grid case only because
+  each of those cases reached the end while still white. Removing the fill and
+  holding the grid at 104/104 cut one more malformed row, and a differential scan
+  of all 128 single mode words against a structured reference row agreed on 113
+  rather than 111. An end-of-line code found mid-row and an extension code *do*
+  fill the remainder in, and dropping those fills instead costs 45 grid cases, so
+  the two are genuinely different and only the overshoot leaves the row alone.
 * **Runs.** A run is coded as makeups plus a terminating code, and **the
   terminating code is emitted even when a makeup consumes the run exactly** —
   a zero-length run still has code `term[0]`. Dropping it breaks every run that

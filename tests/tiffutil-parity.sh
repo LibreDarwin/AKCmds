@@ -649,6 +649,76 @@ s_g4bits_junk()      { g4bits "$1" 111111111111111111111111 drop ""; }
 s_g4bits_tail_junk() { g4bits "$1" "" keep 111111111111111111111111; }
 s_g4bits_tail_zero() { g4bits "$1" "" keep 000000000000000000000000; }
 s_g4bits_tail_alt()  { g4bits "$1" "" keep 101010101010101010101010; }
+# A G4 strip with an explicit end of line mark after the first row.  A Group 4
+# strip needs none, because every row runs to the full width on its own, and
+# the reference never writes one; some senders do.  The reference reads the mark
+# as the end of the strip rather than as the end of a row, so such a strip
+# decodes to its first row and nothing after it.
+#
+# Where to put the mark comes from compressing the same image cut to one row,
+# which is the same first row: the line above it is the imaginary all colour 0
+# line either way.  The end of block mark is twelve bits ending in a one, so
+# the zeros in front of it would survive a strip of trailing zeros, and the
+# twelve bits have to come off with the mark rather than with the zeros.
+g4eol() {
+    local d="$1" w="$2"
+    "$ORACLE" -none "$d/i.tiff" -out "$d/c.tiff" >/dev/null 2>&1 || return 1
+    mktiff "$d/.row0.tiff" little "$w,1,1,1,1"
+    "$ORACLE" -none "$d/.row0.tiff" -out "$d/.row0c.tiff" >/dev/null 2>&1 ||
+        return 1
+    python3 - "$d/c.tiff" "$d/.row0c.tiff" <<'PYEOF' || return 1
+import struct, sys
+
+def data_bits(path):
+    d = bytearray(open(path, "rb").read())
+    e = "<" if d[:2] == b"II" else ">"
+    ifd = struct.unpack_from(e + "I", d, 4)[0]
+    n = struct.unpack_from(e + "H", d, ifd)[0]
+    strip = cnt = None
+    for i in range(n):
+        tag, typ, count = struct.unpack_from(e + "HHI", d, ifd + 2 + i * 12)
+        if typ != 4 or count != 1:      # the strip tables have to be inline
+            continue
+        val = struct.unpack_from(e + "I", d, ifd + 2 + i * 12 + 8)[0]
+        if tag == 273:
+            strip = val
+        elif tag == 279:
+            cnt = val
+    if strip is None or cnt is None:
+        sys.exit("no inline strip table")
+    bits = "".join("1" if (d[strip + (i >> 3)] >> (7 - (i & 7))) & 1 else "0"
+                   for i in range(cnt * 8))
+    return d, e, ifd, n, bits[:-12].rstrip("0")
+
+_, _, _, _, head = data_bits(sys.argv[2])
+d, e, ifd, n, body = data_bits(sys.argv[1])
+bits = head + "000000000001" + body + "000000000001"
+
+size = (len(bits) + 7) // 8
+new = bytearray(size)
+for i, b in enumerate(bits):
+    if b == "1":
+        new[i // 8] |= 1 << (7 - (i & 7))
+
+# The strip is repointed at the copy appended here, so nothing that was
+# already in the file moves and every other tag stays as the reference wrote it.
+off = len(d)
+d += new
+for i in range(n):
+    p = ifd + 2 + i * 12
+    tag = struct.unpack_from(e + "H", d, p)[0]
+    if tag == 273:
+        struct.pack_into(e + "I", d, p + 8, off)
+    elif tag == 279:
+        struct.pack_into(e + "I", d, p + 8, size)
+open(sys.argv[1], "wb").write(bytes(d))
+PYEOF
+    local rc=$?
+    rm -f "$d/.row0.tiff" "$d/.row0c.tiff"
+    return $rc
+}
+s_g4eol_16()  { g4eol "$1" 16; }
+s_g4eol_200() { g4eol "$1" 200; }
 s_pred() {
     "$ORACLE" -lzw -out /dev/null "$1/i.tiff" >/dev/null 2>&1
     :
@@ -1193,6 +1263,13 @@ for g4bits_case in eofb eofb_junk junk tail_junk tail_zero tail_alt; do
 done
 check "g4bits eofb -info" little "$B1G" s_g4bits_eofb -- -info c.tiff
 check "g4bits eofb BE"    big    "$B1G" s_g4bits_eofb -- -none c.tiff -out o.tiff
+# A strip written with an explicit end of line mark after a row is a mark the
+# reference never writes, and it reads the mark as the end of the strip, so
+# these pin a strip that decodes to its first row and nothing after it.
+check "g4eol 16 -none" little "$B1G"   s_g4eol_16  -- -none c.tiff -out o.tiff
+check "g4eol 200 -none" little "$B1GL" s_g4eol_200 -- -none c.tiff -out o.tiff
+check "g4eol 16 -info" little "$B1G"   s_g4eol_16  -- -info c.tiff
+check "g4eol 16 BE"    big    "$B1G"   s_g4eol_16  -- -none c.tiff -out o.tiff
 # An unnamed field draws a warning on stderr, but only where the directory is
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks
 # the raw IFD itself and says nothing, and neither does a conversion.

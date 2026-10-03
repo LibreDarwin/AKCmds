@@ -552,17 +552,19 @@ that is set and the second is ignored, but the duplicate itself is enough to
 cost the image. This port writes the image through instead, so those cases
 compare everything but the output bytes (`check_nobytes ./o.tiff`).
 
-Still open, and therefore *not* pinned down by anything in this file:
+LogLuv is decoded now, in `main.c`, and pinned by fixtures (`bf652e9`). What
+follows is the measurement trail that fixed the arithmetic rather than guessed
+it, kept because the details in it are the reason the decode is bit exact.
 
-- LogLuv is not decoded yet in `main.c`. The way in was open -- a fixture can
-  be written by hand, and one has been -- and the arithmetic on the far side
-  has now been measured out exactly; what is left is implementing it and
-  giving the writer a float output path. The reference tool hands the file
-  to ImageIO and lets ImageIO decode it: `local/AKCmds-main/tiffutil/tiffutil.m`
+- The way in was open throughout: a fixture can be written by hand, and one has
+  been. The reference tool hands the file to ImageIO and lets ImageIO decode
+  it: `local/AKCmds-main/tiffutil/tiffutil.m`
   opens a `CGImageSource` and adds frames to a `CGImageDestination` without
   touching a pixel itself, and the libtiff it bootstraps with `-Dlogluv=ON` is
   there to serve `TIFFPrintDirectory`, not the conversion. So there is no C in
-  the reference to port and nothing to read the numbers off but its output.
+  the reference to port and nothing to read the numbers off but its output,
+  which is why every constant below was pinned against bytes rather than
+  against a description of the format.
 
   Retracted below: two claims that were once taken for granted here were read
   out of the reference tool's output by a probe that was reading 3 bytes a
@@ -903,9 +905,12 @@ Validation, all against `/usr/bin/tiffutil` as the oracle:
   default coefficients, four explicit sets, a multi-strip layout, several
   directories in one file, a flat-luma image, and both byte orders.
 
-Not characterised: a third-party strip using explicit EOLs between rows. The
-mode table handles H, pass, V0-V+3 and EOFB, and a genuine EOL is the same
-twelve bits as an EOFB so a row still ends correctly.
+Characterised, and measured rather than assumed: a genuine end of line mark is
+the same twelve bits as an end of block mark, and the reference reads it as the
+end of the strip rather than as the end of a row. So a third-party strip written
+with one after each row decodes to its first row and nothing after it, and the
+row the mark follows is kept whole. The `g4eol` fixtures pin that; see "Damaged
+G4 strips" below.
 
 The G4 extension code is characterised and decoded (see "The 2D extension code"
 below).
@@ -958,6 +963,14 @@ What is reachable, and what the reference actually does, is recovery:
   carrying the mark up front decodes to. libtiff consumes that mark while
   finishing the row before it, so the next row would otherwise start on the wrong
   bit.
+* **An explicit end of line mark ends the strip too, and the row it follows is
+  kept whole.** A Group 4 strip needs no such mark, because every row runs to
+  the full width on its own, so the reference never writes one; some senders do
+  anyway. libtiff reads it as the end of the strip rather than as the end of a
+  row, which means such a strip decodes to its first row and nothing after it,
+  and not to a strip with a mark wedged somewhere inside it. The row the mark
+  follows survives intact, so the behaviour is worth pinning rather than
+  assuming from the mark's name.
 * **Bits that are in no table end the row they are in.** The rest of the row
   keeps the colour current at that point and decoding moves on to the next row.
   The reference says nothing about it, because its seven bit table always has a
@@ -966,12 +979,19 @@ What is reachable, and what the reference actually does, is recovery:
 * **Neither of them fails the conversion.** A decoder that treats an unreadable
   code as fatal turns both cases into an error the reference does not raise.
 
-The `g4bits` fixtures cover this by rebuilding a strip out of a bit string: an
-end of block mark in front of the rows, bits that are in no code in place of the
-rows, and bits that are in no code after the end of block mark. The remaining
-difference is the width of the window in which the reference accepts a mark that
-starts a few bits off a row boundary, which is a property of how far its table
-lookup can see rather than of the recovery itself.
+The `g4bits` fixtures cover the first two of these by rebuilding a strip out of
+a bit string: an end of block mark in front of the rows, bits that are in no
+code in place of the rows, and bits that are in no code after the end of block
+mark. The `g4eol` fixtures cover the third by putting a mark after the first
+row, which takes the width of that row from compressing the same image cut to
+one row — the same first row, because the line above it is the imaginary all
+colour 0 line either way. Finding that width needs the end of block mark taken
+off before the trailing zeros are stripped: the mark is twelve bits ending in a
+one, so a strip of trailing zeros stops at its own last one and leaves the
+eleven zeros in front of it behind. The remaining difference is the width of the
+window in which the reference accepts a mark that starts a few bits off a row
+boundary, which is a property of how far its table lookup can see rather than of
+the recovery itself.
 
 ### G4 encoding algorithm, byte-exact (settled by differential testing)
 

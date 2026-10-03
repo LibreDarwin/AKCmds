@@ -232,13 +232,12 @@ pbcopy-parity: all
 
 # tiffutil.  The four gaps that kept this out of `test` -- the -cat family,
 # palette sources, multi-directory input, and the positional argument grammar
-# -- are all closed, so it runs as part of `test` now.  1301 cases, all
+# -- are all closed, so it runs as part of `test` now.  1313 cases, all
 # byte-compared against /usr/bin/tiffutil.
 #
-# It does not cover the items NOTES.md still lists as open (16-bit LogLuv and
-# YCbCr Photometric 6, and explicit EOLs between Group 4 rows).  Those are
-# untested rather than failing, so they are not a reason to hold this target
-# back; the harness is green because nothing in it exercises them.
+# The items NOTES.md used to list as open here are closed as well: 16-bit
+# LogLuv and YCbCr Photometric 6 are both decoded, and a G4 strip carrying an
+# explicit end of line mark between rows is pinned by the `g4eol` fixtures.
 tiffutil-parity: all
 	MY="build/$(CONFIG)/tiffutil" bash tests/tiffutil-parity.sh
 

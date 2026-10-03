@@ -703,8 +703,23 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		}
 		if (kind == G4M_VERT) {
 			a1 = b1 + d;
-			if (a1 < from)
-				a1 = from;
+			if (a1 < from) {
+				/* A vertical mode that would step left of
+				 * where this line has already painted ends
+				 * the line instead of moving: the reference
+				 * fills the rest of it in the colour it had
+				 * reached and goes on to the next line.
+				 * Clamping back to the start of the run
+				 * instead paints the whole line that one
+				 * colour, which is a solid line where the
+				 * reference leaves white.  The step only
+				 * ever runs left, so this cannot catch a
+				 * forward mode. */
+				g4_paint(row, from, (int32_t)width, colour,
+				    invert);
+				a0 = (int32_t)width;
+				continue;
+			}
 			if (a1 > (int32_t)width)
 				a1 = (int32_t)width;
 			g4_paint(row, from, a1, colour, invert);

@@ -1004,6 +1004,16 @@ What is reachable, and what the reference actually does, is recovery:
   carrying the mark up front decodes to. libtiff consumes that mark while
   finishing the row before it, so the next row would otherwise start on the wrong
   bit.
+* **A mark partway down a line finishes that line in the colour it had reached.**
+  This is the other half of the same rule and it is easy to get wrong, because the
+  two cases look alike from the outside. A mark that arrives when the line is
+  already full is consumed and nothing is painted, which is the case above. A mark
+  that arrives partway along a line paints the rest of that line in the colour the
+  line was in when the mark turned up -- so a line that had reached black keeps its
+  tail black -- and then stops. Reading it as "the tail is left alone" instead
+  leaves the tail at the starting colour, which is white for every line, and that
+  is visibly wrong the moment a vertical mode has flipped the colour before the
+  mark.
 * **An explicit end of line mark ends the strip too, and the row it follows is
   kept whole.** A Group 4 strip needs no such mark, because every row runs to
   the full width on its own, so the reference never writes one; some senders do

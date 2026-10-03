@@ -671,10 +671,16 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		b1 = (int32_t)next_change(ref, width, a0, colour, invert);
 		g4_match_mode(r, &d, &kind);
 		if (kind == G4M_EOL) {
-			/* An end of block ends the strip, not just this
-			 * row, and the reference leaves the rows it never
-			 * reached at the all colour 0 line they start
-			 * from. */
+			/* An end of block ends the strip, and the line it
+			 * interrupts is finished off in the colour it was
+			 * in rather than abandoned: the reference pads the
+			 * rest of the row before it stops, so a mark that
+			 * lands partway down a line does not throw away
+			 * the colour the line had reached.  Only rows the
+			 * mark stops before ever starting stay at the all
+			 * colour 0 line they begin from, and those are
+			 * handled by the branch above. */
+			g4_paint(row, from, (int32_t)width, colour, invert);
 			return 1;
 		}
 		if (kind == G4M_EXT) {

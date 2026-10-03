@@ -743,12 +743,21 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 			a2 = a1 + (int32_t)r2;
 			if (a1 < from)
 				a1 = from;
-			if (a1 > (int32_t)width)
-				a1 = (int32_t)width;
-			if (a2 < a1)
-				a2 = a1;
-			if (a2 > (int32_t)width)
-				a2 = (int32_t)width;
+			if (a2 > (int32_t)width) {
+				/* A pair of runs that together overrun the
+				 * line is not a line at all.  The reference
+				 * ends the line where the pair begins and
+				 * fills the rest of it in the colour it had
+				 * reached, so none of the pair survives; we
+				 * used to clamp the pair to the width
+				 * instead, which keeps a tail of it and
+				 * turns a line the reference leaves white
+				 * into a marked one.  A pair that ends
+				 * exactly on the width is still good. */
+				g4_paint(row, from, (int32_t)width, colour,
+				    invert);
+				return 0;
+			}
 			g4_paint(row, from, a1, colour, invert);
 			g4_paint(row, a1, a2, colour ^ 1, invert);
 			a0 = a2;

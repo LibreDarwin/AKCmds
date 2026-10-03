@@ -1070,6 +1070,22 @@ every case below, so the algorithm below is settled rather than provisional.
   opposite colour, where `a2` is the next change on the *coding* line past `a1`
   whose colour differs from `a1`'s run. Then `a0 = a2`. `b2` plays no part in
   the horizontal runs.
+* **A horizontal pair that overruns the line is not a line.** When the two runs
+  add up to more than the line width, the reference ends the line where the pair
+  starts and fills the rest of it in the colour it had reached, so none of the
+  pair survives and the line comes out blank when that colour is white. Clamping
+  the pair to the width instead keeps a tail of it and paints a line where the
+  reference leaves none. A pair that ends exactly on the width is still good, so
+  the test is strictly greater than, not greater or equal. Verified over every
+  pair of white and black runs up to 13 and 6 that crosses the boundary.
+* **A vertical mode that cannot step back ends the line.** A vertical-left code
+  that would land left of where the line has already painted has nowhere to go:
+  the reference ends the line there and moves on to the next one. Clamping the
+  landing point back to the start of the run instead paints the whole rest of the
+  line one colour and flips it, turning a line the reference leaves white into a
+  solid one. The step only ever runs left, so this cannot catch a forward code.
+  This is reachable without any damage -- an all-black reference line has no
+  changing element at all, so every vertical-left code against it lands here.
 * **Runs.** A run is coded as makeups plus a terminating code, and **the
   terminating code is emitted even when a makeup consumes the run exactly** —
   a zero-length run still has code `term[0]`. Dropping it breaks every run that

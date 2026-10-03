@@ -133,7 +133,13 @@ static const struct code vert[7] = {
 /* 2D extension code, 0000001.  Seven bits, and the bits after it are codes
  * again, so it cannot be matched as a prefix. */
 #define G4_EXT_LEN 7
-#define G4_EXT_BITS 0x01u
+#define G4_EXT     "0000001"
+/* The reference looks a mode up by seven bits and reads four more after an end
+ * of block mark, so it spends eleven of the mark's twelve bits there and leaves
+ * the flag.  These two are the seven it looks up. */
+#define G4_MAIN_LEN 7
+#define G4_EOL7    "0000000"
+#define G4_EOL_TAIL 4
 
 struct bitbuf {
 	unsigned char *p;
@@ -421,7 +427,6 @@ enum g4_mode {
 
 struct modeent {
 	uint32_t len;
-	uint32_t val;
 	int32_t d;		/* vertical offset */
 	int kind;
 };
@@ -437,19 +442,39 @@ struct runent {
 
 static struct runent runtab[2][G4_RUNTAB_MAX];	/* [0] white, [1] black */
 static size_t runtab_n[2];
-static struct modeent modetab[7 + 4];
-static size_t modetab_n;
+static struct modeent g4main[1 << G4_MAIN_LEN];
 static int g4_tables_ready;
 
-static void
-g4_add_mode(const char *bits, uint32_t len, int32_t d, int kind)
+/* The reference reads its bits least significant bit first, so the first bit of
+ * a code is the low bit of the index it looks that code up by.  A look ahead
+ * assembled here arrives most significant bit first, so it turns round first. */
+static uint32_t
+g4_index(uint32_t acc, uint32_t len)
 {
-	struct modeent *e = &modetab[modetab_n++];
+	uint32_t v = 0;
+	uint32_t i;
 
-	e->len = len;
-	e->val = bits_value(bits, len);
-	e->d = d;
-	e->kind = kind;
+	for (i = 0; i < len; i++)
+		if (acc & (1u << (len - 1 - i)))
+			v |= 1u << i;
+	return v;
+}
+
+/* Record what every seven bit window starting with this code resolves to.  The
+ * codes are a prefix code, so the windows of two of them cannot meet. */
+static void
+g4_set_main(const char *bits, uint32_t len, int32_t d, int kind)
+{
+	uint32_t base = g4_index(bits_value(bits, len), len);
+	uint32_t tail;
+
+	for (tail = 0; tail < (1u << (G4_MAIN_LEN - len)); tail++) {
+		struct modeent *e = &g4main[base | (tail << len)];
+
+		e->len = len;
+		e->d = d;
+		e->kind = kind;
+	}
 }
 
 static void
@@ -472,13 +497,13 @@ g4_build_tables(void)
 	if (g4_tables_ready)
 		return;
 
-	modetab_n = 0;
 	for (i = 0; i < 7; i++)
-		g4_add_mode(vert[i].bits, vert[i].len, (int32_t)i - 3,
+		g4_set_main(vert[i].bits, vert[i].len, (int32_t)i - 3,
 		    G4M_VERT);
-	g4_add_mode(G4_HORIZ, 3, 0, G4M_HORIZ);
-	g4_add_mode(G4_PASS, 4, 0, G4M_PASS);
-	g4_add_mode(G4_EOFB, 12, 0, G4M_EOL);
+	g4_set_main(G4_HORIZ, 3, 0, G4M_HORIZ);
+	g4_set_main(G4_PASS, 4, 0, G4M_PASS);
+	g4_set_main(G4_EXT, G4_EXT_LEN, 0, G4M_EXT);
+	g4_set_main(G4_EOL7, G4_MAIN_LEN, 0, G4M_EOL);
 
 	for (pass = 0; pass < 2; pass++) {
 		const struct code *term = pass != 0 ? black_term : white_term;
@@ -502,48 +527,39 @@ g4_build_tables(void)
 	g4_tables_ready = 1;
 }
 
-/* The mode and run tables are prefix free, so the shortest code that matches
- * the bits so far is the only one that can.  Reading a bit at a time and
- * retesting at each length is enough to find it.
+/* The reference reads seven bits, looks them up in one table, and consumes the
+ * width the entry carries.  It does not read a bit at a time until a code
+ * matches, and the difference is not visible on a code a real encoder emits,
+ * because those are a prefix code and the two routes pick the same one.  It is
+ * very visible on bits that are in no code: the reference still resolves them
+ * to whatever code those seven bits hold, and goes on decoding, where a prefix
+ * scan would give the line up.  The table is complete, which is why the
+ * reference has no main table error path to take.
  *
- * The 2D extension code is the exception: 0000001 is not a prefix code, since
- * its first four bits are the pass code 0001, so a prefix scan can never
- * reach it.  The reference resolves it with a fixed seven bit look ahead, and
- * then reads the bits after the code again as the next mode, so look for the
- * whole seven bit code before scanning for a prefix. */
-static int
+ * This is also what makes the 2D extension code work without a special case,
+ * even though its first four bits are the pass code 0001: seven bits hold it
+ * whole. */
+static void
 g4_match_mode(struct bitreader *r, int32_t *d, int *kind)
 {
 	uint32_t acc = 0;
 	uint32_t n;
-	size_t save = r->bitpos;
-	size_t i;
+	const struct modeent *e;
 
 	g4_build_tables();
 
-	for (n = 1; n <= G4_EXT_LEN; n++) {
+	for (n = 1; n <= G4_MAIN_LEN; n++) {
 		acc = (acc << 1) | (uint32_t)br_bit(r);
 		r->bitpos++;
-		if (n == G4_EXT_LEN && acc == G4_EXT_BITS) {
-			*d = 0;
-			*kind = G4M_EXT;
-			return 0;
-		}
 	}
-	r->bitpos = save;
-	acc = 0;
-
-	for (n = 1; n <= 12; n++) {
-		acc = (acc << 1) | (uint32_t)br_bit(r);
-		r->bitpos++;
-		for (i = 0; i < modetab_n; i++)
-			if (modetab[i].len == n && modetab[i].val == acc) {
-				*d = modetab[i].d;
-				*kind = modetab[i].kind;
-				return 0;
-			}
-	}
-	return -1;
+	e = &g4main[g4_index(acc, G4_MAIN_LEN)];
+	*d = e->d;
+	*kind = e->kind;
+	/* The entry's width can be shorter than the look ahead, and an end of
+	 * block mark reads four more bits after it. */
+	r->bitpos -= G4_MAIN_LEN - e->len;
+	if (e->kind == G4M_EOL)
+		r->bitpos += G4_EOL_TAIL;
 }
 
 static int
@@ -645,25 +661,15 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 			 * bit. */
 			size_t save = r->bitpos;
 
-			if (g4_match_mode(r, &d, &kind) == 0 &&
-			    kind == G4M_EOL)
+			g4_match_mode(r, &d, &kind);
+			if (kind == G4M_EOL)
 				return 1;
 			r->bitpos = save;
 			return 0;
 		}
 		from = a0 < 0 ? 0 : a0;
 		b1 = (int32_t)next_change(ref, width, a0, colour, invert);
-		if (g4_match_mode(r, &d, &kind) < 0) {
-			/* Bits that are in no table end the line the way the
-			 * reference ends one it cannot read: the rest of the
-			 * line keeps the colour it was in, and the next line
-			 * picks up after these bits.  The reference says
-			 * nothing here, because its seven bit main table has
-			 * an entry for every pattern and so it never runs
-			 * out of codes. */
-			g4_paint(row, from, (int32_t)width, colour, invert);
-			return 0;
-		}
+		g4_match_mode(r, &d, &kind);
 		if (kind == G4M_EOL) {
 			/* An end of block ends the strip, not just this
 			 * row, and the reference leaves the rows it never

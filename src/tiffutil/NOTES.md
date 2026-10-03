@@ -947,6 +947,47 @@ The extension code is not the only way to end a row early, so the fixtures here
 use a one-row image: the row the extension leaves behind is then fixed by the code
 alone, rather than by whatever the three bits after it happen to decode to.
 
+### Modes are looked up by seven bits, not scanned as prefixes
+
+The decoder used to read a bit at a time and retest at every length until a mode
+code matched, reaching the extension code by a special case in front of that scan.
+It now does what the reference does: read seven bits, look them up in one table,
+and consume the width the entry carries.
+
+The table is built from the same mode codes already listed here, expanded so that
+every one of the 128 seven-bit windows resolves to a mode. Compared entry by entry
+against `TIFFFaxMainTable` at the pinned revision, all 128 agree on width and on
+which mode they select. The index is little endian in the bit sense -- the first
+bit of a code is the low bit of the index -- which is the reference's byte-reversed
+accumulator showing through, so the look ahead is turned round before indexing.
+
+Two behaviours follow from the width being carried in the table:
+
+* **A mode code shorter than seven bits leaves the surplus bits to the next code.**
+  The scan found the same mode, because the real codes are a prefix code, but this
+  is now true by construction rather than as a side effect.
+* **An end of block mark spends eleven bits, not twelve.** Its table entry is the
+  seven-bit window `0000000` with width seven, and the reference then reads four
+  more. The twelfth bit, the flag that marks the mark as the second of a pair, is
+  left unread -- which is exactly why the mark's acceptance window had drifted by a
+  bit against ours.
+
+The table is complete, so there is no main-table failure path to write. That is
+also why the branch a prefix scan needed, for bits that are in no table, is gone:
+the reference has no such branch either, and every seven-bit window has an entry.
+
+**One difference remains, and it is not in the mode lookup.** A strip whose bits
+are shifted by a few bits -- so that the codes decode, but to the wrong places --
+still diverges from the reference partway down the image. The cause is on the other
+side of the decoder, not this one. libtiff keeps `b1`, the position in the row
+above, as a cursor into that row's run list: it advances it a run at a time in
+`CHECK_b1`, steps it forward once after a vertical or pass mode, and steps it
+*backwards* one run after a vertical-left mode. This decoder instead recomputes a
+single "next changing element" per mode from the finished reference row. The two
+agree while the codes are real, and part company once a mode is asked to step left
+of a position the reference row has no transition for, which is where the shifted
+strips separate. Closing it means carrying the cursor, not changing this table.
+
 ### Damaged G4 strips
 
 There is no separate "bad code word" path to recover along, which is worth

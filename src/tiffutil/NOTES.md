@@ -988,6 +988,24 @@ agree while the codes are real, and part company once a mode is asked to step le
 of a position the reference row has no transition for, which is where the shifted
 strips separate. Closing it means carrying the cursor, not changing this table.
 
+**A 2D extension code reaches the same fault from the other end**, and is worth
+recording separately because two separate experiments turned out to be one. Splicing
+a 2D extension code in front of a real row makes the codes resolve to the wrong
+places in exactly the way a shifted strip does. Running that experiment two ways --
+a three-bit prefix, and a full ten-bit extension code -- produced results that
+differed by exactly one row on every family and agreed on which families diverge,
+which is what a longer prefix sliding the decoded image up one row looks like. They
+are one experiment, not two, and the twenty-six differing rows one of them reported
+were never twenty-six rows of a separate fault.
+
+Against the shipped row, five of the eight extension codes diverge: `000`, `001`,
+`010`, `100` and `101`; `011`, `110` and `111` agree. All five are pixel level, which
+is what makes them the same debt as the 28 windows above rather than a new one. An
+earlier note in this file put the count at four failing prefixes. That was measured
+on a different row and is wrong for the shipped one -- and the disagreement is the
+point, not an embarrassment to correct: which codes diverge is a property of the row
+they are spliced onto, so a list of them is only meaningful next to its fixture.
+
 **How much of the table actually agrees, measured rather than argued.** The parity
 suite now decodes all 128 seven-bit windows against the reference row that changes
 on every pixel, so the claim "the table is complete" is backed by a sweep instead of

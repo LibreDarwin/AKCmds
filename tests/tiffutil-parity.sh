@@ -1387,6 +1387,11 @@ for r in $G4REF; do
     done
 done
 
+# The row the window sweep below hangs its seven bit code off: it changes on
+# every single pixel, so every mode is exercised against a real transition
+# rather than against a row that happens not to have one.
+G4STRUCT=00100110101010001011101000100011101000100011101000101110100010001110100000100101
+
 # Every one of the 128 seven bit mode windows, against the reference row that
 # changes on every single pixel.  This is the sweep that measures how much of the
 # mode table agrees with the reference rather than assuming the rest of it, and
@@ -1415,8 +1420,15 @@ for w in $(seq 0 127); do
         wc="$wc$(( (v >> i) & 1 ))"
         i=$((i - 1))
     done
-    eval "s_g4w_$wc() { s_g4 \"\$1\" && g4body \"\$1\" \
-        00100110101010001011101000100011101000100011101000101110100010001110100000100101$wc; }"
+    # The braces are load bearing: $G4STRUCT$wc with no braces is one variable
+    # name to bash, G4STRUCT0101010, which is unset -- and a case built from an
+    # unset row spec still produces a decodable file, so both tools agree and
+    # the whole sweep passes having tested nothing.  That is the same shape of
+    # failure as printf's %07b below, so it is worth stating rather than
+    # leaving to whoever next renames this.
+    row="${G4STRUCT}${wc}"
+    [ -n "$row" ] || { echo "empty row spec for window $wc" >&2; exit 99; }
+    eval "s_g4w_$wc() { s_g4 \"\$1\" && g4body \"\$1\" ${row}; }"
     case " $G4KNOWN " in
         *" $wc "*) EXPECT_DIFFER=1 ;;
         *) EXPECT_DIFFER=0 ;;
@@ -1451,6 +1463,29 @@ for cut in 1 2 3 4 5 6; do
     done
 done
 EXPECT_DIFFER=0
+
+# A two dimensional extension code in front of a real row.  No encoder emits one
+# mid strip, so this reaches the same fault as the window sweep above from the
+# other end: the codes still resolve, but they resolve to the wrong places, and
+# the two decoders part company further down the image as they go.
+#
+# Which extension codes diverge is a property of the row they are spliced onto,
+# not of the codes, so this list was measured here rather than carried over from
+# the same experiment run against a different row -- where a sixth family
+# diverged.  All five are pixel level differences, not re-encodings, which is
+# what makes them the same debt as the window list rather than a new one.
+G4EX=0000001                              # a 2D extension code, seven bits
+G4EXTKNOWN=$(printf '%s' "000 001 010 100 101" | tr -s '[:space:]' ' ')
+for x in 000 001 010 011 100 101 110 111; do
+    eval "s_g4e_$x() { s_g4 \"\$1\" && g4body \"\$1\" ${G4EX}${x}$G4STRUCT; }"
+    case " $G4EXTKNOWN " in
+        *" $x "*) EXPECT_DIFFER=1 ;;
+        *) EXPECT_DIFFER=0 ;;
+    esac
+    check "g4ext struct $x" little "$B1G" "s_g4e_$x" -- -none c.tiff -out o.tiff
+done
+EXPECT_DIFFER=0
+
 # An unnamed field draws a warning on stderr, but only where the directory is
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks
 # the raw IFD itself and says nothing, and neither does a conversion.

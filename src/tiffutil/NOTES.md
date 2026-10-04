@@ -1090,6 +1090,16 @@ every case below, so the algorithm below is settled rather than provisional.
   found, the remainder comes out black in both. Both fills are load-bearing --
   leaving the row alone instead costs 45 of the 104 grid cases -- so they are
   the opposite of what an overshooting vertical does.
+* **Codes that are in no mode leave the row alone.** When the bits at the
+  changing element match no mode, or a horizontal mode's first run cannot be
+  read, the reference stops the line there and does not touch the rest of the
+  row -- it does not fill the remainder in with the colour the line had
+  reached. Filling it in scores the same on every grid case, because all of them
+  end while still white, so the two are only separable against a reference row
+  that goes on to reach black. There it is worth three more of the 128 single
+  mode words, and it costs nothing on the malformed-strip cases. This is the same
+  rule as an overshooting vertical, and the opposite of an end-of-line or
+  extension mark, which really do fill.
 * **A vertical mode that cannot step back ends the line.** A vertical-left code
   that would land left of where the line has already painted has nowhere to go:
   the reference ends the line there and moves on to the next one. Clamping the

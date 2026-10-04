@@ -734,9 +734,10 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 			if (g4_read_run(r, colour, &r1) < 0 ||
 			    g4_read_run(r, colour ^ 1, &r2) < 0) {
 				/* Same as an unreadable mode word: the line
-				 * ends where the codes do. */
-				g4_paint(row, from, (int32_t)width, colour,
-				    invert);
+				 * ends where the codes do, and the rest of
+				 * the row is left as it stands rather than
+				 * filled in with the colour the line had
+				 * reached.  See NOTES.md. */
 				return 0;
 			}
 			a1 = from + (int32_t)r1;

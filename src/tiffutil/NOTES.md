@@ -988,6 +988,52 @@ agree while the codes are real, and part company once a mode is asked to step le
 of a position the reference row has no transition for, which is where the shifted
 strips separate. Closing it means carrying the cursor, not changing this table.
 
+**How much of the table actually agrees, measured rather than argued.** The parity
+suite now decodes all 128 seven-bit windows against the reference row that changes
+on every pixel, so the claim "the table is complete" is backed by a sweep instead of
+an entry-by-entry reading. 100 of the 128 windows decode row 0 exactly as the
+reference does; **28 do not**, and each of those is a pixel-level difference, not a
+re-encoding one. Those 28 are named in `tests/tiffutil-parity.sh` and reported as
+known divergences, so a 29th fails rather than quietly joining them.
+
+That count is measured against the shipped 16x16 fixture and is specific to it. The
+same sweep against a different base image -- a 4-row one, as used while developing
+-- produces a *different* set of divergent windows, because what the row decodes into
+changes which modes are reached. A list of known divergences is therefore only
+meaningful next to the fixture it was measured against, which is why the list lives
+in the harness rather than in this file.
+
+A second, unrelated debt turned up in the same work, and it is worth keeping
+distinct from the first. Appending a prefix that ends five bits into a real row
+leaves both decoders agreeing on every pixel while the converted files differ: the
+two re-encodings carry the same image and differ only in `StripByteCounts` (15
+against 10) and in where the directory is placed. Nine reference rows all show it,
+and cuts one to four and six do not. Fixing the mode table will not close it, and
+closing the mode table will not change it.
+
+### Two ways a parity case can pass without testing anything
+
+Both of these were live in the suite while the sweep above was being added, and both
+produced green runs. They are recorded because the failure mode is silent -- the
+case passes, the suite passes, and the fixture was never decoded.
+
+- **A generated case name that does not match its generator.** `printf '%07b' N`
+  pads with *spaces*, not zeros, so building a function name from it produced
+  `s_g4w_      0`, which is not a legal function name. No setup ran, both tools then
+  failed on a missing input in exactly the same way, and 128 cases reported success
+  having decoded nothing. `check` now fails a case whose setup function does not
+  exist, and one whose `-none` input the setup did not produce; cases that
+  deliberately name a missing file set `SKIP_FIXTURE`.
+- **A fixture builder that fails quietly.** `mktiff` crashed on any YCbCr shape with
+  explicit coefficients -- the triple is flat-split across the page spec rather than
+  being one field -- so five YCbCr conversions were comparing two identical failures.
+  `check` ignores a builder's status, which is what let this hide; the fixture
+  assertions above are what surfaced it. All eleven YCbCr cases now convert for real.
+
+A third, smaller one: a `-dump` loop named `s_dt_4`, which the generator never
+defines -- it stops at `s_dt_3`, and `s_dt_four` belongs to the refused group -- so
+that case was also comparing nothing.
+
 ### Damaged G4 strips
 
 There is no separate "bad code word" path to recover along, which is worth

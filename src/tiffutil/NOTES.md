@@ -1052,6 +1052,35 @@ A third, smaller one: a `-dump` loop named `s_dt_4`, which the generator never
 defines -- it stops at `s_dt_3`, and `s_dt_four` belongs to the refused group -- so
 that case was also comparing nothing.
 
+**Where the end of block mark lands, which is a fault of its own.** Sweeping every
+truncation of a 16x4 fixture's reference strip, with the mark appended, the two
+decoders agree at every truncation from 89 bits on -- the whole image, and anything
+near it -- and separate at `k` in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66 and 69-88.
+All seventy-two are pixel level differences, not re-encodings.
+
+The shape of that set is worth more than the set itself. It repeats with a twelve
+bit period, ten bits failing to every two that pass, and twelve is the width of the
+mark. So the disagreement is about where the mark falls relative to a row boundary,
+not about any single row's codes, which makes it a *different* fault from the `b1`
+cursor above: fixing the cursor would not close these, and closing these would not
+move the 28 windows. Two faults that happen to both end in "the decoders part
+company partway down the image" should not be filed as one.
+
+It is measured by `EOFPROBE=1` rather than folded into the gate, because it is 258
+cases whose mechanism is not yet understood, and the abort path it lands in is
+already covered by the grid's extension and end of line cases. Marking seventy-two
+unexplained divergences as debt would bury the two that are understood. That is a
+judgement about what the debt list is for, and it is the one thing here worth
+arguing with.
+
+An earlier note in this file gave this as a pair of narrow boundary lists, the
+reference separating at `119..122` where we separate at `121..124`. That did not
+reproduce, and it never reached this file -- it is recorded here only because the
+difference is instructive: it was almost certainly produced by searching the strip
+bytes for the mark and finding byte padding instead, which is the same mistake that
+cost time elsewhere in this work. The measurement above reads the mark's position
+from the directory rather than searching for it.
+
 ### Damaged G4 strips
 
 There is no separate "bad code word" path to recover along, which is worth

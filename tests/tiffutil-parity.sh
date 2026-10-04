@@ -1464,16 +1464,20 @@ for cut in 1 2 3 4 5 6; do
 done
 EXPECT_DIFFER=0
 
-# A two dimensional extension code in front of a real row.  No encoder emits one
-# mid strip, so this reaches the same fault as the window sweep above from the
-# other end: the codes still resolve, but they resolve to the wrong places, and
-# the two decoders part company further down the image as they go.
+# A two dimensional extension code in front of a real row, followed by more
+# rows.  The single row cases above pin down the row the code itself leaves
+# behind and agree throughout; these exist because a code that ends one row says
+# nothing about what the next row does, and that is where the two decoders part
+# company -- they agree on the first row and separate from there down.
 #
-# Which extension codes diverge is a property of the row they are spliced onto,
-# not of the codes, so this list was measured here rather than carried over from
-# the same experiment run against a different row -- where a sixth family
-# diverged.  All five are pixel level differences, not re-encodings, which is
-# what makes them the same debt as the window list rather than a new one.
+# No encoder emits one of these mid strip, so this reaches the same fault as the
+# window sweep below from the other end: the codes still resolve, but they
+# resolve to the wrong places.  Which extension codes diverge is a property of
+# the row they are spliced onto, not of the codes, so this list was measured
+# here rather than carried over from the same experiment run against a different
+# row -- where a sixth family diverged.  All five are pixel level differences,
+# not re-encodings, which is what makes them the same debt as the window list
+# rather than a new one.
 G4EX=0000001                              # a 2D extension code, seven bits
 G4EXTKNOWN=$(printf '%s' "000 001 010 100 101" | tr -s '[:space:]' ' ')
 for x in 000 001 010 011 100 101 110 111; do
@@ -1485,6 +1489,72 @@ for x in 000 001 010 011 100 101 110 111; do
     check "g4ext struct $x" little "$B1G" "s_g4e_$x" -- -none c.tiff -out o.tiff
 done
 EXPECT_DIFFER=0
+
+# A diagnostic, not part of the gate: EOFPROBE=1 sweeps every truncation of the
+# reference's own strip, with the end of block mark appended, and reports where
+# the two decoders separate.  It is 258 cases, so it stays behind a flag.
+#
+# It is here because the answer is not obvious and not in the notes.  Against a
+# 16x4 fixture whose reference strip is 257 bits, the two agree for every
+# truncation from 89 bits on -- the whole image, and anything close to it -- and
+# separate for k in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66 and 69-88.  All
+# seventy-two are pixel level differences, not re-encodings.
+#
+# The shape of that set is the interesting part: it repeats with a twelve bit
+# period, ten bits failing to every two that pass, and twelve is the width of
+# the end of block mark.  So the disagreement is about where the mark lands
+# relative to a row boundary rather than about any one row's codes, which is a
+# different fault from the b1 cursor the mode windows turn on.  It is not marked
+# as debt: the abort path this lands in is already covered by the grid's
+# extension and end of line cases, and adding seventy-two unexplained marked
+# cases would bury the two faults that are actually understood.
+if [ -n "${EOFPROBE-}" ]; then
+    B4="16,4,1,1,1"
+    rm -rf "$ROOT/e"; mkdir -p "$ROOT/e"
+    mktiff "$ROOT/e/i.tiff" little $B4
+    s_g4 "$ROOT/e"
+    # The reference's own strip bits, read by walking the inline strip table.
+    # Nothing here searches the bytes for the end of block mark: a previous
+    # measurement did, and found byte padding instead of the mark, which is a
+    # large part of why the boundary this replaces was never trustworthy.
+    REFBITS=$(python3 - "$ROOT/e/c.tiff" <<'PYEOF'
+import struct, sys
+d = bytearray(open(sys.argv[1], "rb").read())
+e = "<" if d[:2] == b"II" else ">"
+ifd = struct.unpack_from(e + "I", d, 4)[0]
+n = struct.unpack_from(e + "H", d, ifd)[0]
+strip = cnt = None
+for i in range(n):
+    tag, typ, count = struct.unpack_from(e + "HHI", d, ifd + 2 + i * 12)
+    if typ != 4 or count != 1:
+        continue
+    val = struct.unpack_from(e + "I", d, ifd + 2 + i * 12 + 8)[0]
+    if tag == 273:
+        strip = val
+    elif tag == 279:
+        cnt = val
+b = d[strip:strip + cnt]
+print("".join("1" if (b[i >> 3] >> (7 - (i & 7))) & 1 else "0"
+             for i in range(len(b) * 8)).rstrip("0"))
+PYEOF
+)
+    printf 'EOFPROBE: reference strip is %s bits\n' "${#REFBITS}"
+    for k in $(seq 0 "${#REFBITS}"); do
+        eval "s_eo() { s_g4 \"\$1\" && g4body \"\$1\" \"\${REFBITS:0:$k}\"; }"
+        local_before=$FAIL
+        check "eoprobe $k" little "$B4" s_eo -- -none c.tiff -out o.tiff
+        # Only where the case failed: does the reference read the same pixels
+        # back out of our file as out of its own, or is this only the encoding?
+        if [ "$FAIL" -gt "$local_before" ]; then
+            rm -f "$ROOT/o/p.tiff" "$ROOT/m/p.tiff"
+            "$ORACLE" -none "$ROOT/o/o.tiff" -out "$ROOT/o/p.tiff" >/dev/null 2>&1
+            "$ORACLE" -none "$ROOT/m/o.tiff" -out "$ROOT/m/p.tiff" >/dev/null 2>&1
+            if cmp -s "$ROOT/o/p.tiff" "$ROOT/m/p.tiff"; then v="BYTES ONLY"
+            else v="PIXELS DIFFER"; fi
+            printf '  eopix %-4s %s\n' "$k" "$v"
+        fi
+    done
+fi
 
 # An unnamed field draws a warning on stderr, but only where the directory is
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks

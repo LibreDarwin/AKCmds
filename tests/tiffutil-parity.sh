@@ -1498,16 +1498,23 @@ EXPECT_DIFFER=0
 #   16x4  257 bits  fail=72  k in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66, 69-88
 #   16x2  162 bits  fail=72  the same set, exactly
 #   16x8  447 bits  fail=72  the same set, exactly
+#   16x16 827 bits  fail=72  the same set, exactly, every one at k <= 88
 #   16x1  113 bits  fail=38  k in 11-14, 23-26, 35-38, 47-50, 59-62, 71-88
 #
-# Three things fall out of that, and the first is the important one. The failing
-# set is identical for 16x2, 16x4 and 16x8, so adding rows changes nothing and
-# the whole of it lives in row 0; every failing case first differs at the first
-# byte of image data, which is row 0. It survives on a *single row* image, where
+# Read the strip before reading the numbers, or the numbers mislead.  The strip
+# is payload + EOFB + EOFB, and for width 16 the payload is 89 bits for row 0 --
+# 5.6 bits a pixel for a row of alternating pixels, an ordinary horizontal mode
+# encoding.  So every k at or above 89 leaves that payload untouched and the two
+# agree, and that agreement is not evidence of anything: an intact strip has to
+# decode.  All the signal is below 89, where the payload is genuinely truncated
+# and the decoders have to recover, and they do not recover the same way.
+#
+# Of those failures: the set is identical from one row to sixteen, and at sixteen
+# rows every one of them is at k <= 88, so the whole of it is inside row 0 and no
+# other row contributes anything.  It survives on a *single row* image, where
 # there is no row above for a b1 cursor to consult, so this is not the fault the
-# mode windows turn on -- it is a third one. And the set is k congruent to 11, 0,
-# 1 or 2 modulo twelve, twelve being the width of the mark, so the disagreement
-# is about where the mark falls rather than about any one row's codes.
+# mode windows turn on.  And on that single row the failing k are congruent to
+# 11, 0, 1 or 2 modulo twelve, twelve being the width of the mark.
 #
 # Not marked as debt: the mechanism is still not understood, the abort path it
 # lands in is already covered by the grid's extension and end of line cases, and
@@ -1544,6 +1551,10 @@ print("".join("1" if (b[i >> 3] >> (7 - (i & 7))) & 1 else "0"
 PYEOF
 )
     printf 'EOFPROBE: reference strip is %s bits\n' "${#REFBITS}"
+    if [ -n "${EOFBITS-}" ]; then
+        printf 'EOFBITS: %s\n' "$REFBITS"
+        cp "$ROOT/e/c.tiff" "${EOFBITS}.tiff" 2>/dev/null
+    fi
     for k in $(seq 0 "${#REFBITS}"); do
         eval "s_eo() { s_g4 \"\$1\" && g4body \"\$1\" \"\${REFBITS:0:$k}\"; }"
         local_before=$FAIL

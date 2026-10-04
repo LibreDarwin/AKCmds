@@ -1057,25 +1057,38 @@ every truncation of a fixture's reference strip, with the mark appended, finds a
 divergence that belongs to neither of the two above. Varying the height is what
 settles it:
 
-| fixture | reference strip | failing truncations |
+| fixture | strip | failing truncations |
 | --- | --- | --- |
 | 16x8 | 447 bits | 72 |
+| 16x16 | 827 bits | 72, every one at `k` <= 88 |
 | 16x4 | 257 bits | 72 |
 | 16x2 | 162 bits | 72 |
 | 16x1 | 113 bits | 38 |
 
-The 16x2, 16x4 and 16x8 failing sets are identical, not merely the same size, so
-adding rows changes nothing and the whole of it lives in row 0 -- and every failing
-case first differs at the first byte of image data, which is row 0. It survives on a
-*single row* image, where there is no row above for a `b1` cursor to consult. That
-settles it: this is not the cursor fault the mode windows turn on, and not the
-extension code's either.
+**Read the strip before the numbers, because the numbers are misleading on their
+own.** It is `payload + EOFB + EOFB`, and at width 16 the payload is 89 bits for
+row 0 -- 5.6 bits a pixel for a row of alternating pixels, which is an ordinary
+horizontal mode encoding, not a malformed strip. So every `k` at or above 89
+leaves that payload untouched and the two decoders agree, and *that agreement is
+not evidence of anything*: an intact strip has to decode. Everything below 89 is a
+genuinely truncated payload, where the decoders must recover, and here they do not
+recover the same way. An earlier version of this note read the `k >= 89` agreement
+as "the whole image survives", which inverts the sense of the sweep.
 
-On that single row the failing truncations are exactly those `k` congruent to 11, 0,
-1 or 2 modulo twelve, twelve being the width of the mark. So the disagreement is
-about where the mark falls relative to the row's codes rather than about any one
-row's codes -- which is why no amount of closing the mode windows or the extension
-prefixes will touch it.
+What holds of the failures is worth keeping. The set is identical from one row to
+sixteen rows, and at sixteen rows every failing `k` is at or below 88, so the whole
+of it is inside row 0 and no later row contributes anything. It also survives on a
+*single row* image, where there is no row above for a `b1` cursor to consult, which
+settles the attribution: this is not the fault the mode windows turn on. On that
+single row the failing truncations are exactly those `k` congruent to 11, 0, 1 or 2
+modulo twelve, twelve being the width of the mark.
+
+Whether it is the *same* fault as the cut-5 family below is open, and the obvious
+test says no: cutting five bits off this whole-image payload passes. Those cases cut
+a single row's body instead, so they are not the same fixture, and until somebody
+puts the two on one fixture the honest answer is that it might be one abort and fill
+fault wearing two faces -- byte only when five bits go, pixel level when the rest of
+the row goes with them.
 
 None of that makes it urgent to fix. Height is irrelevant to it, the abort path it
 lands in is already covered by the grid's extension and end of line cases, and it

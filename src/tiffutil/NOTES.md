@@ -1078,6 +1078,18 @@ every case below, so the algorithm below is settled rather than provisional.
   reference leaves none. A pair that ends exactly on the width is still good, so
   the test is strictly greater than, not greater or equal. Verified over every
   pair of white and black runs up to 13 and 6 that crosses the boundary.
+* **An end-of-line code found mid-row finishes the line off rather than
+  abandoning it.** When a mode word turns out to be an end-of-line partway down
+  a line, the reference pads the rest of the row in the colour the line had
+  reached and stops, so a mark that lands partway down a line does not throw
+  that colour away. Only rows whose mark stops before they ever start stay at
+  the all-zero line they began from, and those are handled before any mode is
+  read. An extension code ends the line the same way. The colour really is the
+  one reached rather than simply white: checked against a structured reference
+  row, where a vertical step turns the line black before the end-of-line is
+  found, the remainder comes out black in both. Both fills are load-bearing --
+  leaving the row alone instead costs 45 of the 104 grid cases -- so they are
+  the opposite of what an overshooting vertical does.
 * **A vertical mode that cannot step back ends the line.** A vertical-left code
   that would land left of where the line has already painted has nowhere to go:
   the reference ends the line there and moves on to the next one. Clamping the

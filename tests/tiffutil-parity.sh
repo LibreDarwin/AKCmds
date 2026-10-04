@@ -1492,24 +1492,29 @@ EXPECT_DIFFER=0
 
 # A diagnostic, not part of the gate: EOFPROBE=1 sweeps every truncation of the
 # reference's own strip, with the end of block mark appended, and reports where
-# the two decoders separate.  It is 258 cases, so it stays behind a flag.
+# the two decoders separate.  It is hundreds of cases, so it stays behind a flag.
+# EOFSHAPE overrides the fixture, which is what pinned the fault down:
 #
-# It is here because the answer is not obvious and not in the notes.  Against a
-# 16x4 fixture whose reference strip is 257 bits, the two agree for every
-# truncation from 89 bits on -- the whole image, and anything close to it -- and
-# separate for k in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66 and 69-88.  All
-# seventy-two are pixel level differences, not re-encodings.
+#   16x4  257 bits  fail=72  k in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66, 69-88
+#   16x2  162 bits  fail=72  the same set, exactly
+#   16x8  447 bits  fail=72  the same set, exactly
+#   16x1  113 bits  fail=38  k in 11-14, 23-26, 35-38, 47-50, 59-62, 71-88
 #
-# The shape of that set is the interesting part: it repeats with a twelve bit
-# period, ten bits failing to every two that pass, and twelve is the width of
-# the end of block mark.  So the disagreement is about where the mark lands
-# relative to a row boundary rather than about any one row's codes, which is a
-# different fault from the b1 cursor the mode windows turn on.  It is not marked
-# as debt: the abort path this lands in is already covered by the grid's
-# extension and end of line cases, and adding seventy-two unexplained marked
-# cases would bury the two faults that are actually understood.
+# Three things fall out of that, and the first is the important one. The failing
+# set is identical for 16x2, 16x4 and 16x8, so adding rows changes nothing and
+# the whole of it lives in row 0; every failing case first differs at the first
+# byte of image data, which is row 0. It survives on a *single row* image, where
+# there is no row above for a b1 cursor to consult, so this is not the fault the
+# mode windows turn on -- it is a third one. And the set is k congruent to 11, 0,
+# 1 or 2 modulo twelve, twelve being the width of the mark, so the disagreement
+# is about where the mark falls rather than about any one row's codes.
+#
+# Not marked as debt: the mechanism is still not understood, the abort path it
+# lands in is already covered by the grid's extension and end of line cases, and
+# marking hundreds of unexplained marked cases would bury the two faults that
+# are understood.
 if [ -n "${EOFPROBE-}" ]; then
-    B4="16,4,1,1,1"
+    B4="${EOFSHAPE:-16,4,1,1,1}"
     rm -rf "$ROOT/e"; mkdir -p "$ROOT/e"
     mktiff "$ROOT/e/i.tiff" little $B4
     s_g4 "$ROOT/e"
@@ -1552,6 +1557,11 @@ PYEOF
             if cmp -s "$ROOT/o/p.tiff" "$ROOT/m/p.tiff"; then v="BYTES ONLY"
             else v="PIXELS DIFFER"; fi
             printf '  eopix %-4s %s\n' "$k" "$v"
+            # Where they part company, in the re-encoded pixel data.  Char 8 is the
+            # first byte after the TIFF header, i.e. row 0.
+            printf '  eocmp %-4s char %s\n' "$k" \
+                "$(cmp "$ROOT/o/p.tiff" "$ROOT/m/p.tiff" 2>&1 |
+                   sed -n 's/.*differ: char \([0-9]*\).*/\1/p')"
         fi
     done
 fi

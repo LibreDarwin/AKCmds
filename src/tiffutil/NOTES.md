@@ -1052,24 +1052,36 @@ A third, smaller one: a `-dump` loop named `s_dt_4`, which the generator never
 defines -- it stops at `s_dt_3`, and `s_dt_four` belongs to the refused group -- so
 that case was also comparing nothing.
 
-**Where the end of block mark lands, which is a fault of its own.** Sweeping every
-truncation of a 16x4 fixture's reference strip, with the mark appended, the two
-decoders agree at every truncation from 89 bits on -- the whole image, and anything
-near it -- and separate at `k` in 4, 6, 9-18, 21-30, 33-42, 45-54, 57-66 and 69-88.
-All seventy-two are pixel level differences, not re-encodings.
+**Where the end of block mark lands, which is a third fault of its own.** Sweeping
+every truncation of a fixture's reference strip, with the mark appended, finds a
+divergence that belongs to neither of the two above. Varying the height is what
+settles it:
 
-The shape of that set is worth more than the set itself. It repeats with a twelve
-bit period, ten bits failing to every two that pass, and twelve is the width of the
-mark. So the disagreement is about where the mark falls relative to a row boundary,
-not about any single row's codes, which makes it a *different* fault from the `b1`
-cursor above: fixing the cursor would not close these, and closing these would not
-move the 28 windows. Two faults that happen to both end in "the decoders part
-company partway down the image" should not be filed as one.
+| fixture | reference strip | failing truncations |
+| --- | --- | --- |
+| 16x8 | 447 bits | 72 |
+| 16x4 | 257 bits | 72 |
+| 16x2 | 162 bits | 72 |
+| 16x1 | 113 bits | 38 |
 
-It is measured by `EOFPROBE=1` rather than folded into the gate, because it is 258
-cases whose mechanism is not yet understood, and the abort path it lands in is
-already covered by the grid's extension and end of line cases. Marking seventy-two
-unexplained divergences as debt would bury the two that are understood. That is a
+The 16x2, 16x4 and 16x8 failing sets are identical, not merely the same size, so
+adding rows changes nothing and the whole of it lives in row 0 -- and every failing
+case first differs at the first byte of image data, which is row 0. It survives on a
+*single row* image, where there is no row above for a `b1` cursor to consult. That
+settles it: this is not the cursor fault the mode windows turn on, and not the
+extension code's either.
+
+On that single row the failing truncations are exactly those `k` congruent to 11, 0,
+1 or 2 modulo twelve, twelve being the width of the mark. So the disagreement is
+about where the mark falls relative to the row's codes rather than about any one
+row's codes -- which is why no amount of closing the mode windows or the extension
+prefixes will touch it.
+
+None of that makes it urgent to fix. Height is irrelevant to it, the abort path it
+lands in is already covered by the grid's extension and end of line cases, and it
+takes a deliberately mangled strip to reach. It is measured by `EOFPROBE=1`, with
+`EOFSHAPE` for the fixture, rather than folded into the gate: marking hundreds of
+divergences whose mechanism is not understood would bury the two that are. That is a
 judgement about what the debt list is for, and it is the one thing here worth
 arguing with.
 
@@ -1079,7 +1091,8 @@ reproduce, and it never reached this file -- it is recorded here only because th
 difference is instructive: it was almost certainly produced by searching the strip
 bytes for the mark and finding byte padding instead, which is the same mistake that
 cost time elsewhere in this work. The measurement above reads the mark's position
-from the directory rather than searching for it.
+from the directory rather than searching for it. Sweeping the height, which cost one
+flag and four runs, would have caught that at the time.
 
 ### Damaged G4 strips
 

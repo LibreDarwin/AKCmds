@@ -1140,6 +1140,71 @@ cost time elsewhere in this work. The measurement above reads the mark's positio
 from the directory rather than searching for it. Sweeping the height, which cost one
 flag and four runs, would have caught that at the time.
 
+#### What the EOFPROBE sweep actually draws
+
+The sweep compares two G4 *files*, so until now it only ever said that some byte
+in the code stream differs. Reading the pixels instead needs a real decoder, and
+the reference will not do it: `tiffutil -none` writes a Group 4 file, tag 259
+says 4, so the bytes after the header are packed codes rather than pixels and
+walking them by hand reports the wrong thing. Pillow is used instead, and
+`EOFDUMP=<k>` prints the row.
+
+At width 16 the payload is 89 bits: six horizontal pairs of twelve
+bits each -- mode `001`, white run `000111`, black run `010`, painting two pixels
+-- then a vertical tail of seven, six, three and one bits. Truncating the payload
+to `k` bits and appending the mark gives the painted prefix of row 0 below. `0` is
+white, and the two right-hand columns are what each tool drew before the first
+line fix described at the end of this section; ours now matches the reference.
+
+    k            0-14   15-22   23-26   27-34   35-38   39-46   47-50
+    reference    empty  2 px   empty   4 px   empty   6 px   empty
+    ours         empty  2 px    2 px   4 px    4 px   6 px    6 px
+
+    k           51-58  59-62  63-70  71-88   89
+    reference   8 px  empty  10 px  empty   16 px
+    ours         8 px  10 px  10 px  16 px   16 px
+
+Two things follow that the byte comparison had hidden. The reference's row is
+*not* a prefix of what it paints for larger `k`: at 23 it has given back the two
+pixels it drew at 15, and at 71 the ten from 63. Painted length is not monotone in
+`k` at all, which is why the family looks like a list of unrelated boundary bugs
+from the outside. And the two agree exactly on the runs the table marks clean,
+so the debt list is a list of places the pictures differ, not merely the files.
+
+The regression *is* statable per row, but not per line: it is the strip's first
+line that differs, and only that one. A mid-row mark leaves the first line at the
+all colour 0 it starts from, discarding every code the line had already coded;
+every other line pads in the colour it had reached, as the note below describes.
+The two are easy to confuse because a one-row sweep only ever exercises the first
+case. Repeating the same bits one row down -- prefixing a vertical code that
+closes row 0 so the code under test lands on row 1 -- agrees with the reference at
+every width run tried, while the identical bits on row 0 do not.
+
+    sweep (width 16, heights 1,2,3,4,5,8,16, prefixes empty/V0/VL1/pair x1..3,
+    and 0-5 bits of tail before the mark)  divergent fixtures
+      before this fix    180 / 252
+      after this fix       0 / 252
+
+So `g4_decode_line` takes a `firstrow` flag, and its mid-row mark branch paints
+the whole line in colour 0 when set. Effects, all three configurations:
+
+    full gate            PASS=1659 FAIL=0 known-divergent=51  (unchanged debt)
+    EOFPROBE 16x4 sweep  72 -> 34 failures, a strict subset: all 38 one-row
+                           cases fixed, none newly broken
+
+The whole-line reset is still the wrong fix, and for the same reason this one is
+right: it applies the first line's rule to every line, and costs 181 cases across
+the gate, `g4grid`, `g4win` and `g4cut` alike.
+
+What the fix does not reach is a second and separate mechanism, which is why 34
+sweep cases remain. Those are no longer row 0: row 0 now matches at every `k`, and
+the disagreement has moved to row 1, where the reference reads the bits row 0
+leaves unconsumed as the next line's codes and resumes at a different bit than we
+do. At `k=4` the strip is `0010` followed by the mark, which contains no vertical
+code at any bit offset, yet the reference's row 1 is `...............#` -- a
+vertical pad of one pixel at x=15. That is the leftover-bits question below, and it
+is unchanged by the first line fix.
+
 ### Damaged G4 strips
 
 There is no separate "bad code word" path to recover along, which is worth

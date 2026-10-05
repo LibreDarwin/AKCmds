@@ -635,10 +635,11 @@ g4_paint(unsigned char *row, int32_t from, int32_t to, int colour, int invert)
  * this line, 0 for a line that ran out or ended, and -1 for a strip too damaged
  * to decode at all.  A line that ends early keeps the rest of its width in the
  * colour current at that point, which is what the reference does with one it
- * cannot read the rest of. */
+ * cannot read the rest of.  firstrow says whether this is the strip's first
+ * line, which a mark that interrupts it treats differently. */
 static int
 g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref,
-    uint32_t width, int invert)
+    uint32_t width, int invert, int firstrow)
 {
 	int32_t a0 = -1;
 	int colour = 0;
@@ -671,6 +672,17 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		b1 = (int32_t)next_change(ref, width, a0, colour, invert);
 		g4_match_mode(r, &d, &kind);
 		if (kind == G4M_EOL) {
+			if (firstrow) {
+				/* The first line of a strip is the one line
+				 * the reference does not pad: a mark landing
+				 * partway down it leaves it at the all colour
+				 * 0 it starts from, so none of the codes the
+				 * line had already coded survives.  Every
+				 * other line pads in the colour it had
+				 * reached, below.  See NOTES.md. */
+				g4_paint(row, 0, (int32_t)width, 0, invert);
+				return 1;
+			}
 			/* An end of block ends the strip, and the line it
 			 * interrupts is finished off in the colour it was
 			 * in rather than abandoned: the reference pads the
@@ -830,7 +842,7 @@ g4_decode(const unsigned char *in, size_t inlen, uint32_t width, uint32_t rows,
 
 		n = g4_decode_line(&r, px + (size_t)y * width,
 		    y == 0 ? imageline : px + (size_t)(y - 1) * width, width,
-		    invert);
+		    invert, y == 0);
 		if (n < 0)
 			goto fail;
 		if (n > 0)

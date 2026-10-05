@@ -44,7 +44,14 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/tiffutil-parity.XXXXXX") || exit 1
-trap 'rm -rf "$ROOT"' EXIT
+# PARITY_KEEP=1 leaves the work directory behind, so a diagnostic that needs to
+# read a file the run wrote can be inspected after it.  The trap still fires when
+# the value is not set.
+if [ -z "${PARITY_KEEP-}" ]; then
+    trap 'rm -rf "$ROOT"' EXIT
+else
+    printf 'PARITY_KEEP: work directory is %s\n' "$ROOT"
+fi
 
 PASS=0
 FAIL=0
@@ -1563,6 +1570,43 @@ PYEOF
         printf 'EOFBITS: %s\n' "$REFBITS"
         cp "$ROOT/e/c.tiff" "${EOFBITS}.tiff" 2>/dev/null
     fi
+    # EOFDUMP=1,2,4 prints the pixels the reference and we each read back, so
+    # the row 0 disagreement can be read as pixels rather than inferred from a
+    # byte offset.  Only rows that already failed are dumped, since a row the
+    # two agree on has nothing to show.
+    #
+    # The file being read is p.tiff, written above by "-none", which is still a
+    # Group 4 file: tag 259 on it says 4, not 1.  So its bytes are packed codes,
+    # not pixels, and walking them by hand reads the wrong thing entirely.  PIL
+    # is used to do the decode properly and report the row it actually holds.
+    # "1" is a black pixel here, matching the 0/1 packed-bits convention.
+    pixrow() {
+        python3 - "$1" "${2:-0}" <<'PYEOF'
+import sys
+try:
+    from PIL import Image
+except ImportError:
+    print("?no-pil")
+    raise SystemExit
+try:
+    im = Image.open(sys.argv[1])
+    w, h = im.size
+    bits = im.convert("1").tobytes()
+except Exception:
+    print("?unreadable")
+    raise SystemExit
+y = int(sys.argv[2])
+if y >= h:
+    print("?no-such-row")
+    raise SystemExit
+# Bytes per line comes from the width and the sample size, not from RowsPerStrip:
+# tag 278 counts rows, so using it as a stride reads the wrong bytes entirely.
+bpl = (w + 7) // 8
+row = bits[y * bpl:(y + 1) * bpl]
+print("".join("1" if (row[i >> 3] >> (7 - (i & 7))) & 1 else "0"
+             for i in range(w)))
+PYEOF
+    }
     for k in $(seq 0 "${#REFBITS}"); do
         eval "s_eo() { s_g4 \"\$1\" && g4body \"\$1\" \"\${REFBITS:0:$k}\"; }"
         local_before=$FAIL
@@ -1576,11 +1620,21 @@ PYEOF
             if cmp -s "$ROOT/o/p.tiff" "$ROOT/m/p.tiff"; then v="BYTES ONLY"
             else v="PIXELS DIFFER"; fi
             printf '  eopix %-4s %s\n' "$k" "$v"
-            # Where they part company, in the re-encoded pixel data.  Char 8 is the
-            # first byte after the TIFF header, i.e. row 0.
+            # Where they part company, in the re-encoded data.  This is a byte
+            # offset into a Group 4 file, so it is a place in the code stream,
+            # not a pixel: use EOFDUMP below to see the pixels themselves.
             printf '  eocmp %-4s char %s\n' "$k" \
                 "$(cmp "$ROOT/o/p.tiff" "$ROOT/m/p.tiff" 2>&1 |
                    sed -n 's/.*differ: char \([0-9]*\).*/\1/p')"
+            case ",${EOFDUMP-}," in
+            *",$k,"*)
+                # p.tiff is the read back of each side's file, written just above.
+                printf '  eofdump %-4s o %s\n' "$k" \
+                    "$(pixrow "$ROOT/o/p.tiff" 0)"
+                printf '  eofdump %-4s m %s\n' "$k" \
+                    "$(pixrow "$ROOT/m/p.tiff" 0)"
+                ;;
+            esac
         fi
     done
 fi

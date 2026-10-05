@@ -1204,25 +1204,26 @@ bits failing, and start row 1 at bit 16, where everything reads as zero and the 
 comes out empty. The reference's row 1 is `...............#` -- a vertical pad of one
 pixel at x=15 -- so it reads the leftovers differently.
 
-**This is not a cursor offset.** The obvious reading was that the reference resumes
-two or three bits earlier than we do, and that reading is wrong, and it is wrong in a
-way worth recording: it was inferred by comparing each failing `k` against *our own
-output at `k+1`, `k+2` and `k+3`*, which measures nothing about the reference's cursor.
-Each `k` is a different strip, and a failed run lookup always burns thirteen bits, so
-the rows being compared come from different code, not from one cursor moved. The
-"equals ours two truncations later in 17 of 34, three later in 6" arithmetic is an
-artefact of that and is withdrawn.
+**What actually happens: the mark is spent as eleven bits, not thirteen.** The offset
+reading was wrong, and it was wrong because of a defect in the instrument rather than in
+the model. `/tmp/luvp/trace.c` passed `firstrow = 1` for *every* candidate row, so any
+start bit that reached the mark blanked its whole row through the first row branch and
+could never match anything. No bit appeared to work, which is what made the difference
+look structural. With `firstrow` defaulted to 0 -- the value every row other than the
+strip's first has to use -- the same search finds `B = 1` and `B = 16` producing
+`...............#` for `H+EOL+V0+VL1`. That rerun is what produced the rule below.
 
-Two independent measurements refute the offset reading:
-
-- **Forcing our row 1 to start at a chosen bit reproduces `k=4` from bits 1 and 14,
-  but no bit reproduces `k=9`, `k=10` or `k=18` at all.** If a single resume position
-  were the rule it would have to exist for every case, and for a third of them there
-  is none. Bit 14 is one compatible position, not the pinned one.
-- **The disagreement is not confined to row 1 once the strip is long enough.** On
-  hand-built 16-wide strips the reference puts the padded pixel on row 2 or row 3,
-  depending on what follows the mark, so it is a row-accounting difference and not a
-  row-1 rule at all.
+The rule: **a seven zero window reached inside a run lookup is the start of an end of
+block mark.** No run code in either colour's table begins with seven zeros -- the longest
+leading zero run any of them has is six -- so a seven zero window inside a run can only
+be the start of a mark. The reference spends on it the same bits it
+spends on a mark read as a mode: the seven it looked at plus the four after them. The
+mark therefore ends the line *and leaves the cursor one bit inside itself*. On
+`H+EOL+VL1` that puts row 1 at bit 14, which is the mark's own final `1` -- read as a
+`V0`, which runs to the width and returns without painting -- so row 2 starts on the
+`010` after it, and the mark at the end of that row is what puts the pixel at x=15.
+That is the whole row accounting, and it is why the pixel lands on row 2 rather than
+row 1: no row is shifted, eleven bits are spent where we spend thirteen.
 
 The repro is much smaller than the sweep, which is the useful consequence. Row 0 is a
 horizontal code, then a mark, then a tail; width 16, any height:
@@ -1243,16 +1244,55 @@ reference is not merely shifting where a row lands either -- it is painting a
 different span of the row. `H+EOL+VL1+V0` already matching us says the tail
 participates in the rule.
 
-Decoding one line from *every* bit offset against the reference's own rows as the
-reference line (`/tmp/luvp/trace.c`, driven by `trace.py`) settles the rest: for
-`H+EOL+V0+VL1` there is **no** offset, and no `(bitpos, a0, colour)` state, that yields
-the row the reference produces. Our decoder cannot produce that row from that strip by
-any start position at all. That is a structural difference, and it is why no candidate
-below helps: each of them adjusts *where decoding resumes*, which cannot be right when
-the *content* is unreachable.
+The eleven bit rule accounts for every row of that table, but the *paints* in it need
+saying, because they are not what the code names suggest. In this table `010` carries
+d = -1 and `011` carries d = +1 -- the mirror of T.4, where `010` is VL1 and `011` is
+VR1 -- and the reference decodes it that way. The single pixel rows above are the proof,
+because nothing else in them can produce a pixel at x=15.
 
-Five repairs were built against the offset reading and all five cost more than they fix,
-so none is in the tree:
+`H+EOL+VL1` is not a vertical pad stepping to x=15. On row 2 the `010` moves a0 from 16
+down to 15 and paints [0,15) white, flips the colour to 1, and the mark that follows pads
+[15,16) with it; that padding is the black pixel. `H+EOL+000+VL1` is the same shape one
+code out: `000010` carries d = -2 and moves a0 to 14, and the mark pads [14,16) in
+colour 1, which is the two pixels. Nothing in either row paints those pixels the way a
+vertical mode would; the mark does, every time, in whatever colour the line had reached.
+
+That also accounts for the `VL1` count without a parity rule. Each `010` moves a0 to 15
+and flips the colour without advancing any further, so `m` of them leave the line in
+colour `m mod 2` and the mark pads x15 with that: odd `m` paints it, even `m` does not.
+And `H+EOL+V0+VL1` differs from `H+EOL+VL1` only in that the extra `V0` spends a row of
+its own, moving the `010` from row 2 to row 3.
+
+Two of the fixture names above are therefore misnomers worth flagging, because reading
+them against T.4 sends you looking for a rule that is not there: the `VL1` in
+`H+EOL+VL1` is a code with d = -1 here, and `000010` in `H+EOL+000+VL1` is a code with
+d = -2. The mode table has been cross checked entry by entry against what the reference
+does with each code, and it is self consistent: `vert[]` is indexed by `d + 3` and the
+code recorded against each `d` is the one the reference uses. Worth knowing for a
+separate reason, too -- a table mistake of this shape is invisible to any fixture whose
+strips were encoded by the same table that decodes them, which is most of them, so only
+hand written strips like these can catch it.
+
+`/tmp/luvp/candU` implements exactly that and reproduces the reference on **every row
+of all fourteen cases measured against it** -- the seven above plus `H+EOL`,
+`H+EOL+V0*n` for n = 0..3, `H+EOL+VL1*m` for m = 1..4, `H+EOL+V0*2+VL1`,
+`H+EOL+H(w1b1)`, `H+EOL+pass` and `H+V0+EOL`: 84 rows, 84 correct. On the faithful
+16x4 sweep it takes the failures from 34 to 7:
+
+    sweep 16x4    34 -> 7   (k = 9, 10, 18, 30, 42, 54, 66)
+    full gate     FAIL 0 -> 16
+
+It is still not in the tree, because of those 16, and they are one family: the mark
+landing *after* a terminating run code of the pair (`H` + `00110101` + mark). That is
+`g4cut ... -4` across all nine reference rows, `g4win struct 1110010`, and six `g4src`
+cases. There the reference paints the row *after* the mark solid black, or
+`1111111111111110` when a `VL1` follows, and neither eleven nor thirteen bits produces
+that. Restricting detection to the first run of the pair only (`/tmp/luvp/candV`)
+restores all 16 and re-breaks 10 sweep cases, 17 divergent, so which run of the pair the
+mark falls in is not the discriminator either. That family is the next thing to measure.
+
+Five repairs were built before the eleven bit rule against the offset reading, and all
+five cost more than they fix, so none is in the tree:
 
 | candidate | idea | gate |
 | --- | --- | --- |
@@ -1261,6 +1301,13 @@ so none is in the tree:
 | F | as E, plus restoring the cursor after a failed run read | 1 fixed, 35 regressed |
 | G | a mark in a run position ends the line instead of failing the pair | 2 fixed, 16 regressed, across `g4src`, `g4win` and `g4cut` |
 | R, S | force row 1's start bit, or `a0`/`colour`, to whatever reproduces the oracle | no case fixed that the plain fix had not already fixed |
+| U | a seven zero window in a run is a mark, spent as 7 + 4, ending the line but not the strip | 7/258 sweep divergent, 16 gate failures |
+| V | as U, but only in the first run of a pair | 17/258, gate restored |
+
+G is the closest of these to U and the comparison is the useful part: G got the "the
+line ends" half right and left the cursor thirteen bits on, so it fixed 2 and cost 16;
+U keeps the eleven bit accounting and gets 34 down to 7. The two halves were being
+guessed separately and they had to be measured together.
 
 Two lessons, and the second one is the one that cost the most. A rule measured on the
 sweep alone is not yet a rule: every candidate in the table above looks right on the
@@ -1270,6 +1317,15 @@ strips is not a measurement at all -- that is what the withdrawn offset arithmet
 and it produced a confident, specific, wrong answer with tidy percentages attached. The
 minimal repro table is worth more than that arithmetic because every row of it is a
 strip whose contents can be written down and checked.
+
+A third lesson, which is the one this section has now cost twice: **an instrument that
+returns "no match" for every input is not evidence that no match exists.**
+`trace.c` reporting no bit position could produce the row is only information if the
+instrument can produce a match at all, and passing `firstrow = 1` to every row made it
+blank each one through the branch documented above. The trace harness has been fixed to
+take `firstrow` as an argument defaulting to 0; the check that it works is that it now
+reports hits, and the check that it is measuring the right thing is that those hits land
+on rows the reference actually produces.
 
 ### Damaged G4 strips
 

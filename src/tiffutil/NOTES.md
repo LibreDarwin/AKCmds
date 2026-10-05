@@ -1022,12 +1022,27 @@ meaningful next to the fixture it was measured against, which is why the list li
 in the harness rather than in this file.
 
 A second, unrelated debt turned up in the same work, and it is worth keeping
-distinct from the first. Appending a prefix that ends five bits into a real row
-leaves both decoders agreeing on every pixel while the converted files differ: the
-two re-encodings carry the same image and differ only in `StripByteCounts` (15
-against 10) and in where the directory is placed. Nine reference rows all show it,
-and cuts one to four and six do not. Fixing the mode table will not close it, and
-closing the mode table will not change it.
+distinct from the first. Appending a prefix that ends a few bits into a real row
+leaves the two decoders disagreeing. Nine reference rows all show it.
+
+**This paragraph was wrong about how it shows, and the correction changed the
+size of the debt.** It used to say the two agree on every pixel and that the
+converted files differ only in `StripByteCounts` (15 against 10) and in where the
+directory sits. They do not agree on the pixels: re-encoding both outputs through
+the reference and comparing puts the first difference at the *first byte of image
+data* for all nine rows. Differing `StripByteCounts` was a symptom of the pixels
+differing, not a milder version of the same thing, and reading it as the milder
+thing is what kept this out of the pixel-level count.
+
+Extending the sweep from cuts one to six out to cuts one to sixteen found the rest
+of it: **cut twelve diverges too**, and had never been tested. Cuts one to four,
+six to eleven and thirteen to sixteen all agree. So the family is two cuts, not
+one, and both are pixel level -- eighteen cases, not nine.
+
+That leaves two faults rather than three, because this and the truncation sweep
+below are the same fault. Cut five leaves eleven bits and cut twelve leaves four,
+and both are lengths the sweep also diverges at, which is a reason to merge them
+and not yet a proof.
 
 ### Two ways a parity case can pass without testing anything
 
@@ -1083,12 +1098,13 @@ settles the attribution: this is not the fault the mode windows turn on. On that
 single row the failing truncations are exactly those `k` congruent to 11, 0, 1 or 2
 modulo twelve, twelve being the width of the mark.
 
-Whether it is the *same* fault as the cut-5 family below is open, and the obvious
-test says no: cutting five bits off this whole-image payload passes. Those cases cut
-a single row's body instead, so they are not the same fixture, and until somebody
-puts the two on one fixture the honest answer is that it might be one abort and fill
-fault wearing two faces -- byte only when five bits go, pixel level when the rest of
-the row goes with them.
+Whether it is the *same* fault as the cut family above is close to settled. Cutting
+five bits off this whole-image payload passes, but those cases cut a single row's
+body, and cutting twelve leaves four bits where cutting five leaves eleven -- and
+both four and eleven are lengths this sweep diverges at. So the best reading is
+that there are two faults here, not three: the `b1` cursor, and a truncated row.
+The remaining uncertainty is that the two families have not been put on a single
+fixture, which is the experiment that would settle it.
 
 None of that makes it urgent to fix. Height is irrelevant to it, the abort path it
 lands in is already covered by the grid's extension and end of line cases, and it

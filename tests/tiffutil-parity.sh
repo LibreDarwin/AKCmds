@@ -1441,22 +1441,30 @@ EXPECT_DIFFER=0
 # A real row cut short partway through its last horizontal run.  The reference
 # leaves the rest of that row alone, and so do we now; the cases that end while
 # still white cannot tell the two rules apart, these can.
+#
+# Sweeping the cut from one to sixteen instead of stopping at six is what found
+# the second debt.  Cutting twelve bits short diverges too, and it had never been
+# tested; one to four, six to eleven and thirteen to sixteen all agree.  Both
+# debts are pixel level -- the two re-encodings part company at the first byte of
+# image data -- so the earlier reading of cut five as byte only, along with its
+# note about the two files differing in StripByteCounts, was wrong: differing
+# StripByteCounts is a symptom of the pixels differing, not a substitute for it.
+#
+# Five leaves eleven bits and twelve leaves four, and both are lengths the
+# EOFPROBE sweep below also diverges at.  That is the reason to treat this and
+# the sweep as one fault rather than two, though it is a reason and not a proof.
 G4TC=0010011010100101
-for cut in 1 2 3 4 5 6; do
+for cut in $(seq 1 16); do
     tc=${G4TC:0:$((16 - cut))}
     for r in $G4REF; do
         rn=${r%%:*}
         rc=${r#*:}
         eval "s_g4tc_${rn}_$cut() { s_g4 \"\$1\" && g4body \"\$1\" $rc$tc; }"
     done
-    # Cutting the row five bits short decodes to the same pixels on both sides
-    # but lands on different bytes in the converted file: the two re-encodings
-    # carry the same image and differ only in StripByteCounts (15 against 10)
-    # and in where the directory sits.  This is a second and separate debt from
-    # the mode table above, which is pixel level; marked rather than dropped
-    # because it is a real difference the older fixtures never reached.
-    EXPECT_DIFFER=0
-    [ "$cut" = 5 ] && EXPECT_DIFFER=1
+    case "$cut" in
+        5|12) EXPECT_DIFFER=1 ;;
+        *) EXPECT_DIFFER=0 ;;
+    esac
     for r in $G4REF; do
         check "g4cut ${r%%:*} -$cut" little "$B1G" "s_g4tc_${r%%:*}_$cut" \
             -- -none c.tiff -out o.tiff

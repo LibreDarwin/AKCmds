@@ -1098,13 +1098,30 @@ settles the attribution: this is not the fault the mode windows turn on. On that
 single row the failing truncations are exactly those `k` congruent to 11, 0, 1 or 2
 modulo twelve, twelve being the width of the mark.
 
-Whether it is the *same* fault as the cut family above is close to settled. Cutting
-five bits off this whole-image payload passes, but those cases cut a single row's
-body, and cutting twelve leaves four bits where cutting five leaves eleven -- and
-both four and eleven are lengths this sweep diverges at. So the best reading is
-that there are two faults here, not three: the `b1` cursor, and a truncated row.
-The remaining uncertainty is that the two families have not been put on a single
-fixture, which is the experiment that would settle it.
+Whether it is the *same* fault as the cut family above is now measured, on one
+fixture and with one set of bits so that only the position varies. `P` is a real
+89-bit row from a 16x1 fixture; each variant truncates a row and puts it
+somewhere:
+
+| truncated row | where | failing lengths |
+| --- | --- | --- |
+| `P`, 89 bits | row 0, alone | 72 of 89 |
+| `P` | row 1, after a whole `P` | none |
+| `P` | row 1, after a reference row | none |
+| `G4TC`, 16 bits | row 0, alone | 4: 4, 11, 14, 15 |
+| `G4TC` | row 1, after a reference row | 2: 4, 11 |
+
+So it is one fault, and row 0 is where it bites. The same bits that fail as row 0
+pass untouched one row down, which rules out the loose version of the claim --
+this is not "a truncated row" in general, there is something about row 0 having no
+row above it. But the cut family does fail in row 1, at 4 and 11, and those are
+two of the lengths it fails at in row 0. So the cut family and this sweep are one
+fault, with row 0 being the loud version of it rather than a separate thing.
+
+That is worth stating carefully, because it also narrows where a fix would have to
+look: whatever disagrees is not the cursor, since with no row above the cursor
+cannot be the input, and it is not position, since the identical bits one row down
+are fine.
 
 None of that makes it urgent to fix. Height is irrelevant to it, the abort path it
 lands in is already covered by the grid's extension and end of line cases, and it

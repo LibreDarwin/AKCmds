@@ -1585,7 +1585,74 @@ PYEOF
     done
 fi
 
-# An unnamed field draws a warning on stderr, but only where the directory is
+# G4MERGE=1 asks whether the cut family and the truncation sweep above are one
+# fault, using one fixture and one set of bits so that only the position varies.
+# P is a real 89 bit row from a 16x1 fixture, and each variant puts a prefix of it
+# somewhere different:
+#
+#   A  prefix(P,L)              row 0 alone, which is what EOFPROBE does
+#   B  P + prefix(P,L)          row 0 whole, row 1 cut short
+#   C  refrow + prefix(P,L)     row 0 some other row, row 1 cut short
+#   D  prefix(G4TC,L)           the cut row alone, as row 0
+#   E  P + prefix(G4TC,L)       the cut row after a whole row
+#
+# The answer is that it is one fault, and that row 0 is where it bites:
+#
+#   A  72 of 89 lengths      B  none      C  none
+#   D   4 of 16, at 4, 11, 14, 15          E  none
+#
+# The same bits that fail as row 0 pass untouched one row down (B, E), so this is
+# not "a truncated row" in general -- there is something about row 0 having no row
+# above it.  But the cut family does fail in row 1 at 4 and 11, which are two of
+# the lengths D fails at, so the two families are one fault with the row 0 case
+# being the loud version of it rather than a separate thing.
+if [ -n "${G4MERGE-}" ]; then
+    BM="16,2,1,1,1"
+    rm -rf "$ROOT/mg"; mkdir -p "$ROOT/mg"
+    mktiff "$ROOT/mg/i.tiff" little "16,1,1,1,1"
+    s_g4 "$ROOT/mg"
+    P=$(python3 - "$ROOT/mg/c.tiff" <<'PYEOF'
+import struct, sys
+d = bytearray(open(sys.argv[1], "rb").read())
+e = "<" if d[:2] == b"II" else ">"
+ifd = struct.unpack_from(e + "I", d, 4)[0]
+n = struct.unpack_from(e + "H", d, ifd)[0]
+strip = cnt = None
+for i in range(n):
+    tag, typ, count = struct.unpack_from(e + "HHI", d, ifd + 2 + i * 12)
+    if typ != 4 or count != 1:
+        continue
+    val = struct.unpack_from(e + "I", d, ifd + 2 + i * 12 + 8)[0]
+    if tag == 273:
+        strip = val
+    elif tag == 279:
+        cnt = val
+b = d[strip:strip + cnt]
+print("".join("1" if (b[i >> 3] >> (7 - (i & 7))) & 1 else "0"
+             for i in range(len(b) * 8)).rstrip("0"))
+PYEOF
+)
+    # Two end of block marks are the last 24 bits; what is left is the payload.
+    P=${P:0:$(( ${#P} - 24 ))}
+    REFROW=${G4REF%% *}
+    REFROW=${REFROW#*:}
+    printf 'G4MERGE: P is %s bits, ref row %s bits\n' "${#P}" "${#REFROW}"
+    for L in $(seq 0 "${#P}"); do
+        for v in A B C D E; do
+            case "$v" in
+                A) body=${P:0:$L} ;;
+                B) body=$P${P:0:$L} ;;
+                C) body=$REFROW${P:0:$L} ;;
+                D) body=${G4TC:0:$L} ;;
+                E) body=$P${G4TC:0:$L} ;;
+            esac
+            eval "s_mg() { s_g4 \"\$1\" && g4body \"\$1\" $body; }"
+            mb=$FAIL
+            check "merge $v $L" little "$BM" s_mg -- -none c.tiff -out o.tiff
+            [ "$FAIL" -gt "$mb" ] && printf '  mergefail %s %s\n' "$v" "$L"
+        done
+    done
+fi
 # read through the TIFF library: -info and -verboseinfo report it, -dump walks
 # the raw IFD itself and says nothing, and neither does a conversion.
 for op in -info -verboseinfo; do

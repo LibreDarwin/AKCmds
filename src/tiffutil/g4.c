@@ -562,17 +562,59 @@ g4_match_mode(struct bitreader *r, int32_t *d, int *kind)
 		r->bitpos += G4_EOL_TAIL;
 }
 
+/* Whether the twelve bits from start really are the end of block mark.  A
+ * seven zero window is not enough on its own: a strip whose codes run out in
+ * the middle of a mark leaves the same seven zeros and then nothing, and the
+ * reference reads that as a damaged run rather than as a mark.  br_bit answers
+ * zero past the end, so the length has to be checked before the bits. */
 static int
-g4_match_run(struct bitreader *r, int pass, uint32_t *run, int *term)
+g4_is_mark(struct bitreader *r, size_t start)
+{
+	size_t save = r->bitpos;
+	int i;
+
+	if (start + G4_MAIN_LEN + G4_EOL_TAIL + 1 > r->len * 8) {
+		r->bitpos = save;
+		return 0;
+	}
+	r->bitpos = start + G4_MAIN_LEN;
+	for (i = 0; i < G4_EOL_TAIL; i++, r->bitpos++)
+		if (br_bit(r) != 0)
+			goto no;
+	if (br_bit(r) != 1)
+		goto no;
+	r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
+	return 1;
+no:
+	r->bitpos = save;
+	return 0;
+}
+
+static int
+g4_match_run(struct bitreader *r, int pass, uint32_t *run, uint32_t *term,
+    int *mark)
 {
 	uint32_t acc = 0;
 	uint32_t n;
 	size_t i;
+	size_t start = r->bitpos;
 
+	*mark = 0;
 	g4_build_tables();
 	for (n = 1; n <= 13; n++) {
 		acc = (acc << 1) | (uint32_t)br_bit(r);
 		r->bitpos++;
+		/* No run code begins with seven zeros: the longest leading
+		 * zero run any of them has is six, so a seven zero window
+		 * inside a run can only be the start of an end of block mark,
+		 * and only if the twelve bits really are there.  The reference
+		 * spends on it the same bits it spends on one read as a mode:
+		 * the seven it looked at plus the four after them. */
+		if (n == G4_MAIN_LEN && acc == 0 && g4_is_mark(r, start)) {
+			r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
+			*mark = 1;
+			return -1;
+		}
 		for (i = 0; i < runtab_n[pass]; i++)
 			if (runtab[pass][i].len == n &&
 			    runtab[pass][i].val == acc) {
@@ -589,18 +631,19 @@ g4_match_run(struct bitreader *r, int pass, uint32_t *run, int *term)
  * run, so a decoder that stops at the makeup leaves the line short by it and
  * reads the rest of the strip as the wrong pixels. */
 static int
-g4_read_run(struct bitreader *r, int pass, uint32_t *run)
+g4_read_run(struct bitreader *r, int pass, uint32_t *run, int *mark)
 {
 	uint32_t total = 0;
 	int i;
 
+	*mark = 0;
 	/* Every makeup is worth at least 64, so this covers any run a line can
 	 * hold while still bounding a damaged strip. */
 	for (i = 0; i < 256; i++) {
 		uint32_t got;
-		int term;
+		uint32_t term;
 
-		if (g4_match_run(r, pass, &got, &term) < 0)
+		if (g4_match_run(r, pass, &got, &term, mark) < 0)
 			return -1;
 		total += got;
 		if (term) {
@@ -632,17 +675,21 @@ g4_paint(unsigned char *row, int32_t from, int32_t to, int colour, int invert)
  * imaginary pixel at -1 and b1 is the reference line's first change.
  *
  * Returns 1 for an end of block mark, which ends the strip rather than just
- * this line, 0 for a line that ran out or ended, and -1 for a strip too damaged
- * to decode at all.  A line that ends early keeps the rest of its width in the
+ * this line, 0 for a line that ran out or ended, -1 for a strip too damaged
+ * to decode at all, and 2 for a line that ended inside a run with a mark, where
+ * the position and colour the line had reached carry over to the line the mark
+ * hands on to.  A line that ends early keeps the rest of its width in the
  * colour current at that point, which is what the reference does with one it
  * cannot read the rest of.  firstrow says whether this is the strip's first
- * line, which a mark that interrupts it treats differently. */
+ * line, which a mark that interrupts it treats differently.  a0s and colours
+ * hold the position and colour the line starts from and are updated only for
+ * the 2 case. */
 static int
 g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref,
-    uint32_t width, int invert, int firstrow)
+    uint32_t width, int invert, int firstrow, int32_t *a0s, int *colours)
 {
-	int32_t a0 = -1;
-	int colour = 0;
+	int32_t a0 = *a0s;
+	int colour = *colours;
 	uint64_t guard;
 
 	/* A well formed line codes at most one element per pixel plus a
@@ -741,16 +788,47 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 		}
 		/* Horizontal: two runs, the second completing the pair. */
 		{
-			uint32_t r1, r2;
+			uint32_t r1 = 0, r2 = 0;
+			int mark;
+			int infirst = 1;
+			int nread = g4_read_run(r, colour, &r1, &mark);
 
-			if (g4_read_run(r, colour, &r1) < 0 ||
-			    g4_read_run(r, colour ^ 1, &r2) < 0) {
+			if (nread >= 0 && !mark) {
+				infirst = 0;
+				nread = g4_read_run(r, colour ^ 1, &r2,
+				    &mark);
+			}
+			if (nread < 0 || mark) {
+				int32_t a;
+
 				/* Same as an unreadable mode word: the line
 				 * ends where the codes do, and the rest of
 				 * the row is left as it stands rather than
 				 * filled in with the colour the line had
-				 * reached.  See NOTES.md. */
-				return 0;
+				 * reached.  See NOTES.md.  A mark inside a
+				 * run ends the line the way one read as a
+				 * mode does, except that the next line
+				 * still follows: the mark is only
+				 * consumed, it does not end the strip. */
+				if (!mark || infirst)
+					/* Nothing was coded, so the line the
+					 * mark hands on to starts from the
+					 * beginning like any other. */
+					return 0;
+				/* The run the pair did read still counts.
+				 * It is painted, the pair's colour flip
+				 * stands, and both carry into the line the
+				 * mark hands on to -- which is why `H` and a
+				 * white run and a mark leaves the next line
+				 * black from where the run ended rather than
+				 * leaving it blank. */
+				a = from + (int32_t)r1;
+				if (a > (int32_t)width)
+					a = (int32_t)width;
+				g4_paint(row, from, a, colour, invert);
+				*a0s = a;
+				*colours = colour ^ 1;
+				return 2;
 			}
 			a1 = from + (int32_t)r1;
 			a2 = a1 + (int32_t)r2;
@@ -817,6 +895,8 @@ g4_decode(const unsigned char *in, size_t inlen, uint32_t width, uint32_t rows,
 	struct bitreader r;
 	unsigned char *px, *imageline, *packed;
 	uint32_t y;
+	int32_t a0;
+	int colour;
 
 	*out = NULL;
 	*outlen = 0;
@@ -837,16 +917,25 @@ g4_decode(const unsigned char *in, size_t inlen, uint32_t width, uint32_t rows,
 	r.p = in;
 	r.len = inlen;
 	r.bitpos = 0;
+	a0 = -1;
+	colour = 0;
 	for (y = 0; y < rows; y++) {
 		int n;
 
 		n = g4_decode_line(&r, px + (size_t)y * width,
 		    y == 0 ? imageline : px + (size_t)(y - 1) * width, width,
-		    invert, y == 0);
+		    invert, y == 0, &a0, &colour);
 		if (n < 0)
 			goto fail;
-		if (n > 0)
+		if (n == 1)
 			break;
+		if (n == 0) {
+			/* An ordinary line ends where it was coded, so the
+			 * next one starts from the beginning again.  Only a
+			 * mark carries a line's position and colour over. */
+			a0 = -1;
+			colour = 0;
+		}
 		memcpy(imageline, px + (size_t)y * width, width);
 	}
 	if ((packed = g4_pack(px, width, rows)) == NULL)

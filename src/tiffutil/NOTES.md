@@ -1035,14 +1035,20 @@ differing, not a milder version of the same thing, and reading it as the milder
 thing is what kept this out of the pixel-level count.
 
 Extending the sweep from cuts one to six out to cuts one to sixteen found the rest
-of it: **cut twelve diverges too**, and had never been tested. Cuts one to four,
-six to eleven and thirteen to sixteen all agree. So the family is two cuts, not
-one, and both are pixel level -- eighteen cases, not nine.
+of it: **cut twelve diverges too**, and had never been tested. The other fifteen cuts
+agree, so the family is one cut, not two, and it is pixel level.
 
-That leaves two faults rather than three, because this and the truncation sweep
-below are the same fault. Cut five leaves eleven bits and cut twelve leaves four,
-and both are lengths the sweep also diverges at, which is a reason to merge them
-and not yet a proof.
+Cut five used to be marked divergent as well, on the reasoning that it left eleven bits
+and that eleven was a length the sweep also diverges at. That was a real cut and it
+agreed all along; it was marked because cut twelve was rather than measured on its own,
+and it is now measured on its own. Nine cases became hard checks and passed.
+
+That left two faults rather than three, because this and the truncation sweep
+below looked like the same fault. Cut five leaves eleven bits and cut twelve leaves
+four, and both are lengths the sweep also diverges at, which is a reason to have
+merged them. It was the wrong merge: cut five never diverged, and the rule that fixed
+cut twelve is the mark-in-a-run rule below, not the offset arithmetic this paragraph
+used to reason from.
 
 ### Two ways a parity case can pass without testing anything
 
@@ -1188,7 +1194,10 @@ every width run tried, while the identical bits on row 0 do not.
 So `g4_decode_line` takes a `firstrow` flag, and its mid-row mark branch paints
 the whole line in colour 0 when set. Effects, all three configurations:
 
-    full gate            PASS=1659 FAIL=0 known-divergent=51  (unchanged debt)
+    full gate            PASS=1659 FAIL=0 known-divergent=51  (unchanged debt;
+                           that was the state after this fix alone. The mark in a
+                           run rule further below promotes 18 of those 51, so the
+                           gate now reads PASS=1677 known-divergent=33.)
     EOFPROBE 16x4 sweep  72 -> 34 failures, a strict subset: all 38 one-row
                            cases fixed, none newly broken
 
@@ -1282,17 +1291,75 @@ of all fourteen cases measured against it** -- the seven above plus `H+EOL`,
     sweep 16x4    34 -> 7   (k = 9, 10, 18, 30, 42, 54, 66)
     full gate     FAIL 0 -> 16
 
-It is still not in the tree, because of those 16, and they are one family: the mark
-landing *after* a terminating run code of the pair (`H` + `00110101` + mark). That is
-`g4cut ... -4` across all nine reference rows, `g4win struct 1110010`, and six `g4src`
-cases. There the reference paints the row *after* the mark solid black, or
+Those 16 are one family: the mark landing *after* a terminating run code of the pair
+(`H` + `00110101` + mark). That is `g4cut ... -4` across all nine reference rows,
+`g4win struct 1110010`, and six `g4src` cases. There the reference paints the row
+*after* the mark black from the end of the run the pair did code, or
 `1111111111111110` when a `VL1` follows, and neither eleven nor thirteen bits produces
-that. Restricting detection to the first run of the pair only (`/tmp/luvp/candV`)
-restores all 16 and re-breaks 10 sweep cases, 17 divergent, so which run of the pair the
-mark falls in is not the discriminator either. That family is the next thing to measure.
+that.
 
-Five repairs were built before the eleven bit rule against the offset reading, and all
-five cost more than they fix, so none is in the tree:
+Worth adding to that count, because the gate could not see it at the time: U also
+broke fifteen cases that were *already* marked divergent, which is invisible while a
+marked case stays marked. Rerun with U against this gate's expectations after the
+markers came off, and the damage is thirty one cases, not sixteen:
+
+    U against the current gate    FAIL 31
+      g4cut ... -4 and ... -5, 9 rows each                18
+      g4win struct 0010111 0011000 0011011 0011100        6
+               0011110 0011111 1110010
+      six g4src cases                                       6
+
+**The discriminator is which run of the pair the mark falls in, and what the pair does
+with the run it already read.** A mark inside a run does not simply end the line: the
+run that was coded before it counts, the pair's colour flip stands, and the position
+and colour carry into the line the mark hands on to. That is the same accounting the
+first line branch needed and did not have. So `g4_decode_line` returns a third outcome
+-- 2, meaning *the line ended in a run, and this is the state the next line starts
+from* -- and `g4_decode` clears the carried state only for an ordinary line.
+
+The family above is the second run of the pair: `H` + `00110101` + mark spends the
+white run, so the mark lands with `r1` in hand. The minimal repro for it is one bit
+shorter than the ones already tabulated, and the whole sixteen wide family behaves:
+
+| strip | reference |
+| --- | --- |
+| `H+W(n)+EOL`, n = 0..15 | row 0 empty, row 1 white for x<n and black from x=n |
+
+That is the rule stated as a picture. `n` is the run that was coded, so the next line
+starts black at `x = n` and the line before it is untouched -- the run is painted on
+row 0 and the mark pads row 0 in the colour the pair had reached, and row 1 inherits
+the endpoint. A mark in the *first* run of the pair is the opposite case: nothing was
+coded, so there is nothing to carry and the next line starts from the beginning like
+any other. Both halves are needed, and they are not the same half: detection happens in
+both runs, while only the second run has anything to hand on. `candV`, which detects in
+the first run only, restores the gate by never reaching the sixteen cases and costs ten
+sweep cases U had fixed.
+
+One more measurement belongs here, because it is the reason the detection is not the
+seven zero window on its own. `H+V0+EOL` is `0011000000000001`: a horizontal mode, an
+empty first run, then a seven zero prefix and a `1`, which is the mark truncated
+one bit short. The reference reads that as a damaged run, not as a mark, and so do we.
+`br_bit` answers zero past the end of the strip, so a stripped-down check would have
+seen the mark's eleven bits and consumed a mark that is not there. `g4_is_mark`
+therefore checks the length first -- twelve bits from `start` must be inside the strip
+-- and only then the bits, which is why `n = 0` in the table above is a row 1 that is
+white from 0 to 0 and black from there rather than an empty second row.
+
+    minimal matrix   84 / 84 rows correct (release and sanitize builds)
+    sweep 16x4       34 -> 28   (k = 4, 6, 10, 16, 17, 18, 21, 22, 28, 29, 30, 33,
+                                 34, 40, 41, 42, 45, 46, 52, 53, 54, 57, 58, 64, 65,
+                                 66, 69, 70)
+    full gate        PASS=1659 FAIL=0 known-divergent=51 -> FAIL 0 with 18 promoted,
+                     PASS=1677 known-divergent=33
+
+28 rather than 7 is not a regression: six of U's seven are in W's list too, and W
+fixes 9, 15, 27, 39, 51 and 63 on top of them without regressing any. The 28 are the
+mode windows rather than mark cases, which is the debt the window sweep was written to
+measure. Nothing in this change claims them.
+
+These repairs were all built against the offset reading, and every one of them cost more
+than it fixed. Only W is in the tree. The table is kept because the halves of the
+correct rule were each guessed wrong on their own:
 
 | candidate | idea | gate |
 | --- | --- | --- |
@@ -1303,11 +1370,15 @@ five cost more than they fix, so none is in the tree:
 | R, S | force row 1's start bit, or `a0`/`colour`, to whatever reproduces the oracle | no case fixed that the plain fix had not already fixed |
 | U | a seven zero window in a run is a mark, spent as 7 + 4, ending the line but not the strip | 7/258 sweep divergent, 16 gate failures |
 | V | as U, but only in the first run of a pair | 17/258, gate restored |
+| **W** | **as U, plus carrying the coded run's endpoint and the pair's colour flip into the next line, and requiring all twelve bits to be present** | **28/258, gate clean at FAIL=0** |
 
 G is the closest of these to U and the comparison is the useful part: G got the "the
 line ends" half right and left the cursor thirteen bits on, so it fixed 2 and cost 16;
 U keeps the eleven bit accounting and gets 34 down to 7. The two halves were being
-guessed separately and they had to be measured together.
+guessed separately and they had to be measured together. W is U plus the third half --
+what the *next* line inherits -- and that half is what turns 31 gate failures into none.
+V, which detects in the first run only, restores the gate by accident: it never reaches
+the cases that need carrying, at the price of ten sweep cases U had fixed.
 
 Two lessons, and the second one is the one that cost the most. A rule measured on the
 sweep alone is not yet a rule: every candidate in the table above looks right on the

@@ -1402,18 +1402,22 @@ G4STRUCT=00100110101010001011101000100011101000100011101000101110100010001110100
 # Every one of the 128 seven bit mode windows, against the reference row that
 # changes on every single pixel.  This is the sweep that measures how much of the
 # mode table agrees with the reference rather than assuming the rest of it, and
-# it is where the remaining known divergences live: 28 of the 128 windows decode
+# it is where the remaining known divergences live: 19 of the 128 windows decode
 # row 0 differently, and each is a pixel level difference rather than a
 # re-encoding one.  Marked rather than dropped, and reported separately, so that
-# a 29th one shows up as a failure instead of joining them.
+# a 20th one shows up as a failure instead of joining them.
+#
+# Nine windows left this list when a mark inside a run was given the accounting
+# the reference uses: the nine whose windows are the tail of a horizontal pair,
+# where the mark lands in the second run and the pair's colour flip and endpoint
+# carry into the next line.
 #
 # The list is measured against the shipped 16x16 fixture rather than a local one:
 # the set of divergent windows depends on the image the row is decoded into, so a
 # list measured elsewhere is not this list.
-G4KNOWN=$(printf '%s' "0001000 0001001 0010000 0010111 0011000 0011011 0011100
-0011110 0011111 0100010 0110001 0110010 0110011 0111001 1000100 1001000
-1001001 1001010 1001011 1001100 1001110 1010001 1011001 1100010 1100100
-1110001 1110011 1111001" | tr -s '[:space:]' ' ')
+G4KNOWN=$(printf '%s' "0001000 0001001 0010000 0100010 0110001 0110010 0110011
+ 1000100 1001000 1001001 1001010 1001011 1001100 1001110 1010001 1100010
+ 1100100 1110001 1110011" | tr -s '[:space:]' ' ')
 
 for w in $(seq 0 127); do
     # printf's %07b pads with spaces rather than zeros, which would put the
@@ -1450,16 +1454,20 @@ EXPECT_DIFFER=0
 # still white cannot tell the two rules apart, these can.
 #
 # Sweeping the cut from one to sixteen instead of stopping at six is what found
-# the second debt.  Cutting twelve bits short diverges too, and it had never been
-# tested; one to four, six to eleven and thirteen to sixteen all agree.  Both
-# debts are pixel level -- the two re-encodings part company at the first byte of
-# image data -- so the earlier reading of cut five as byte only, along with its
-# note about the two files differing in StripByteCounts, was wrong: differing
-# StripByteCounts is a symptom of the pixels differing, not a substitute for it.
+# the debt this loop is for.  Cutting twelve bits short diverges, and it had never
+# been tested; the other fifteen cuts agree.  The debt is pixel level -- the two
+# re-encodings part company at the first byte of image data -- so the earlier
+# reading of cut five as byte only, along with its note about the two files
+# differing in StripByteCounts, was wrong: differing StripByteCounts is a symptom
+# of the pixels differing, not a substitute for it.
 #
-# Five leaves eleven bits and twelve leaves four, and both are lengths the
-# EOFPROBE sweep below also diverges at.  That is the reason to treat this and
-# the sweep as one fault rather than two, though it is a reason and not a proof.
+# Cut five used to be marked divergent here too, on the reasoning that it leaves
+# eleven bits and that eleven is a length the EOFPROBE sweep below also diverges
+# at.  It agreed all along; it was marked because cut twelve was rather than
+# measured on its own, and it is now measured on its own.  That merge with the
+# sweep was the wrong one -- the rule that fixed cut twelve is the mark inside a
+# run rule in NOTES.md, not the offset arithmetic the merge was argued from --
+# which is the argument for marking each case on its own evidence.
 G4TC=0010011010100101
 for cut in $(seq 1 16); do
     tc=${G4TC:0:$((16 - cut))}
@@ -1469,7 +1477,7 @@ for cut in $(seq 1 16); do
         eval "s_g4tc_${rn}_$cut() { s_g4 \"\$1\" && g4body \"\$1\" $rc$tc; }"
     done
     case "$cut" in
-        5|12) EXPECT_DIFFER=1 ;;
+        12) EXPECT_DIFFER=1 ;;
         *) EXPECT_DIFFER=0 ;;
     esac
     for r in $G4REF; do

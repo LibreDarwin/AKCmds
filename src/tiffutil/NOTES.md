@@ -1198,12 +1198,78 @@ the gate, `g4grid`, `g4win` and `g4cut` alike.
 
 What the fix does not reach is a second and separate mechanism, which is why 34
 sweep cases remain. Those are no longer row 0: row 0 now matches at every `k`, and
-the disagreement has moved to row 1, where the reference reads the bits row 0
-leaves unconsumed as the next line's codes and resumes at a different bit than we
-do. At `k=4` the strip is `0010` followed by the mark, which contains no vertical
-code at any bit offset, yet the reference's row 1 is `...............#` -- a
-vertical pad of one pixel at x=15. That is the leftover-bits question below, and it
-is unchanged by the first line fix.
+the disagreement has moved to row 1. Row 0 reads its mode as horizontal and then looks
+for a white run where the mark already is; we find no run code at all, burn thirteen
+bits failing, and start row 1 at bit 16, where everything reads as zero and the line
+comes out empty. The reference's row 1 is `...............#` -- a vertical pad of one
+pixel at x=15 -- so it reads the leftovers differently.
+
+**This is not a cursor offset.** The obvious reading was that the reference resumes
+two or three bits earlier than we do, and that reading is wrong, and it is wrong in a
+way worth recording: it was inferred by comparing each failing `k` against *our own
+output at `k+1`, `k+2` and `k+3`*, which measures nothing about the reference's cursor.
+Each `k` is a different strip, and a failed run lookup always burns thirteen bits, so
+the rows being compared come from different code, not from one cursor moved. The
+"equals ours two truncations later in 17 of 34, three later in 6" arithmetic is an
+artefact of that and is withdrawn.
+
+Two independent measurements refute the offset reading:
+
+- **Forcing our row 1 to start at a chosen bit reproduces `k=4` from bits 1 and 14,
+  but no bit reproduces `k=9`, `k=10` or `k=18` at all.** If a single resume position
+  were the rule it would have to exist for every case, and for a third of them there
+  is none. Bit 14 is one compatible position, not the pinned one.
+- **The disagreement is not confined to row 1 once the strip is long enough.** On
+  hand-built 16-wide strips the reference puts the padded pixel on row 2 or row 3,
+  depending on what follows the mark, so it is a row-accounting difference and not a
+  row-1 rule at all.
+
+The repro is much smaller than the sweep, which is the useful consequence. Row 0 is a
+horizontal code, then a mark, then a tail; width 16, any height:
+
+| strip | reference |
+| --- | --- |
+| `H+EOL` | every row empty |
+| `H+EOL+VL1` | **row 2** = `...............#` |
+| `H+EOL+VL1+V0` | row 2 = `...............#` (we already match this one) |
+| `H+EOL+VL1+VL1` | every row empty |
+| `H+EOL+V0+VL1` | **row 3** = `...............#` |
+| `H+EOL+00+VL1` | every row empty |
+| `H+EOL+000+VL1` | row 2 = `..............##` |
+
+`H+EOL+VL1` is eighteen bits of input and reproduces a real divergence on its own, with
+no truncation sweep involved. `H+EOL+000+VL1` painting *two* pixels says the
+reference is not merely shifting where a row lands either -- it is painting a
+different span of the row. `H+EOL+VL1+V0` already matching us says the tail
+participates in the rule.
+
+Decoding one line from *every* bit offset against the reference's own rows as the
+reference line (`/tmp/luvp/trace.c`, driven by `trace.py`) settles the rest: for
+`H+EOL+V0+VL1` there is **no** offset, and no `(bitpos, a0, colour)` state, that yields
+the row the reference produces. Our decoder cannot produce that row from that strip by
+any start position at all. That is a structural difference, and it is why no candidate
+below helps: each of them adjusts *where decoding resumes*, which cannot be right when
+the *content* is unreachable.
+
+Five repairs were built against the offset reading and all five cost more than they fix,
+so none is in the tree:
+
+| candidate | idea | gate |
+| --- | --- | --- |
+| D | a first line mark ends the line, not the strip, so row 1 continues | 46/258 sweep divergent, up from 34 |
+| E | charge the four bit tail to a run lookup that matched the mark | no effect; the run table holds no such entry, the lookup simply fails |
+| F | as E, plus restoring the cursor after a failed run read | 1 fixed, 35 regressed |
+| G | a mark in a run position ends the line instead of failing the pair | 2 fixed, 16 regressed, across `g4src`, `g4win` and `g4cut` |
+| R, S | force row 1's start bit, or `a0`/`colour`, to whatever reproduces the oracle | no case fixed that the plain fix had not already fixed |
+
+Two lessons, and the second one is the one that cost the most. A rule measured on the
+sweep alone is not yet a rule: every candidate in the table above looks right on the
+258 truncation fixtures and is wrong somewhere in the ordinary cases, so the gate has
+to be the arbiter and not the sweep. And a rule measured by comparing two *different*
+strips is not a measurement at all -- that is what the withdrawn offset arithmetic was,
+and it produced a confident, specific, wrong answer with tidy percentages attached. The
+minimal repro table is worth more than that arithmetic because every row of it is a
+strip whose contents can be written down and checked.
 
 ### Damaged G4 strips
 

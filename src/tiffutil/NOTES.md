@@ -1401,6 +1401,13 @@ be nailed down at the bit level instead.
     after shipping   PASS=1677 FAIL=0 known-divergent=20 fixed-since-marked=13
     after promotion  PASS=1690 FAIL=0 known-divergent=20 fixed-since-marked=0
 
+    sweep 16x4       34 -> 28 under W -> 16 under this rule (k = 10, 18, 21, 22,
+                     30, 33, 34, 42, 45, 46, 54, 57, 58, 66, 69, 70), all pixel
+                     level and all inside W's 28: twelve closed, nothing new.
+                     U scored 7 on the same sweep and cost sixteen gate cases;
+                     the sweep is not the arbiter, but 16 against 28 is still
+                     the first candidate to improve both numbers at once.
+
 The 13 fixed are now hard assertions in tiffutil-parity.sh: all nine reference rows at
 cut twelve, and the four first run windows 0010000, 0100010, 1001000 and 1100100,
 left the marked lists (G4KNOWN drops from 19 windows to 15).  What is left on the

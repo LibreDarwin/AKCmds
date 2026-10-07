@@ -1535,6 +1535,12 @@ EXPECT_DIFFER=0
 #   16x16 827 bits  fail=72  the same set, exactly, every one at k <= 88
 #   16x1  113 bits  fail=38  k in 11-14, 23-26, 35-38, 47-50, 59-62, 71-88
 #
+# Those five rows are the fault as it was found, before the mark rules in
+# NOTES.md shipped.  Run today it reports 16 failures, at k = 10, 18, 21, 22,
+# 30, 33, 34, 42, 45, 46, 54, 57, 58, 66, 69, 70 -- every one of them inside
+# the ranges above and every one pixel level.  The table stays as a record of
+# where the fault was; the sixteen are where it still is.
+#
 # Read the strip before reading the numbers, or the numbers mislead.  The strip
 # is payload + EOFB + EOFB, and for width 16 the payload is 89 bits for row 0 --
 # 5.6 bits a pixel for a row of alternating pixels, an ordinary horizontal mode

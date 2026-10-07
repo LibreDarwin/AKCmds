@@ -562,18 +562,26 @@ g4_match_mode(struct bitreader *r, int32_t *d, int *kind)
 		r->bitpos += G4_EOL_TAIL;
 }
 
-/* Whether the twelve bits from start really are the end of block mark.  A
- * seven zero window is not enough on its own: a strip whose codes run out in
- * the middle of a mark leaves the same seven zeros and then nothing, and the
- * reference reads that as a damaged run rather than as a mark.  br_bit answers
- * zero past the end, so the length has to be checked before the bits. */
+/* Whether the eleven bits from start really are the start of an end of block
+ * mark.  A seven zero window is not enough on its own: a strip whose codes run
+ * out in the middle of a mark leaves the same seven zeros and then nothing,
+ * and the reference reads that as a damaged run rather than as a mark.  br_bit
+ * answers zero past the end, so the length has to be checked before the bits.
+ * In the first run of a horizontal pair the reference also accepts a mark
+ * whose terminal one is not the next bit -- the window is the one bit short of
+ * the pair's end, and the EOFB its codes ran against was truncated -- so a
+ * first run only checks the eleven bits.  In the second run the twelve bits
+ * really have to be there and the bit after the tail has to be one; a mark
+ * that lands late there is a damaged run, as a stripped down first run check
+ * would have enjoyed.  Both spend the same eleven bits. */
 static int
-g4_is_mark(struct bitreader *r, size_t start)
+g4_is_mark(struct bitreader *r, size_t start, int first)
 {
 	size_t save = r->bitpos;
 	int i;
 
-	if (start + G4_MAIN_LEN + G4_EOL_TAIL + 1 > r->len * 8) {
+	if (start + G4_MAIN_LEN + G4_EOL_TAIL + (first ? 0 : 1) >
+	    r->len * 8) {
 		r->bitpos = save;
 		return 0;
 	}
@@ -581,7 +589,7 @@ g4_is_mark(struct bitreader *r, size_t start)
 	for (i = 0; i < G4_EOL_TAIL; i++, r->bitpos++)
 		if (br_bit(r) != 0)
 			goto no;
-	if (br_bit(r) != 1)
+	if (!first && br_bit(r) != 1)
 		goto no;
 	r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
 	return 1;
@@ -592,7 +600,7 @@ no:
 
 static int
 g4_match_run(struct bitreader *r, int pass, uint32_t *run, uint32_t *term,
-    int *mark)
+    int *mark, int first)
 {
 	uint32_t acc = 0;
 	uint32_t n;
@@ -607,10 +615,11 @@ g4_match_run(struct bitreader *r, int pass, uint32_t *run, uint32_t *term,
 		/* No run code begins with seven zeros: the longest leading
 		 * zero run any of them has is six, so a seven zero window
 		 * inside a run can only be the start of an end of block mark,
-		 * and only if the twelve bits really are there.  The reference
+		 * and then only if the bits really are there.  The reference
 		 * spends on it the same bits it spends on one read as a mode:
 		 * the seven it looked at plus the four after them. */
-		if (n == G4_MAIN_LEN && acc == 0 && g4_is_mark(r, start)) {
+		if (n == G4_MAIN_LEN && acc == 0 && g4_is_mark(r, start,
+		    first)) {
 			r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
 			*mark = 1;
 			return -1;
@@ -631,7 +640,7 @@ g4_match_run(struct bitreader *r, int pass, uint32_t *run, uint32_t *term,
  * run, so a decoder that stops at the makeup leaves the line short by it and
  * reads the rest of the strip as the wrong pixels. */
 static int
-g4_read_run(struct bitreader *r, int pass, uint32_t *run, int *mark)
+g4_read_run(struct bitreader *r, int pass, uint32_t *run, int *mark, int first)
 {
 	uint32_t total = 0;
 	int i;
@@ -643,7 +652,7 @@ g4_read_run(struct bitreader *r, int pass, uint32_t *run, int *mark)
 		uint32_t got;
 		uint32_t term;
 
-		if (g4_match_run(r, pass, &got, &term, mark) < 0)
+		if (g4_match_run(r, pass, &got, &term, mark, first) < 0)
 			return -1;
 		total += got;
 		if (term) {
@@ -779,8 +788,20 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 				a0 = (int32_t)width;
 				continue;
 			}
-			if (a1 > (int32_t)width)
-				a1 = (int32_t)width;
+			if (a1 > (int32_t)width) {
+				/* Symmetrically, a step right past the line's
+				 * end stops it instead of clamping to it.  b1 at
+				 * width means the reference's run of this colour
+				 * reaches the end of the line, so b1 + d for any
+				 * d above 0 is beyond it.  Clamping would fill
+				 * the rest of the line with the colour it had
+				 * reached; the reference leaves it as it stands,
+				 * which a left step to b1 - n followed by a right
+				 * one shows, the line having already painted up
+				 * to b1 - n.  See NOTES.md. */
+				a0 = (int32_t)width;
+				continue;
+			}
 			g4_paint(row, from, a1, colour, invert);
 			a0 = a1;
 			colour ^= 1;
@@ -791,12 +812,12 @@ g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref
 			uint32_t r1 = 0, r2 = 0;
 			int mark;
 			int infirst = 1;
-			int nread = g4_read_run(r, colour, &r1, &mark);
+			int nread = g4_read_run(r, colour, &r1, &mark, 1);
 
 			if (nread >= 0 && !mark) {
 				infirst = 0;
 				nread = g4_read_run(r, colour ^ 1, &r2,
-				    &mark);
+				    &mark, 0);
 			}
 			if (nread < 0 || mark) {
 				int32_t a;

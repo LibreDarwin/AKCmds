@@ -1331,9 +1331,10 @@ row 0 and the mark pads row 0 in the colour the pair had reached, and row 1 inhe
 the endpoint. A mark in the *first* run of the pair is the opposite case: nothing was
 coded, so there is nothing to carry and the next line starts from the beginning like
 any other. Both halves are needed, and they are not the same half: detection happens in
-both runs, while only the second run has anything to hand on. `candV`, which detects in
-the first run only, restores the gate by never reaching the sixteen cases and costs ten
-sweep cases U had fixed.
+both runs, while only the second run has anything to hand on. `candV`, which drops
+second run detection entirely, restores the gate by never reaching the sixteen cases
+and costs ten sweep cases U had fixed; the shipped version instead keeps detection in
+both runs and relaxes the first run only (below).
 
 One more measurement belongs here, because it is the reason the detection is not the
 seven zero window on its own. `H+V0+EOL` is `0011000000000001`: a horizontal mode, an
@@ -1342,8 +1343,9 @@ one bit short. The reference reads that as a damaged run, not as a mark, and so 
 `br_bit` answers zero past the end of the strip, so a stripped-down check would have
 seen the mark's eleven bits and consumed a mark that is not there. `g4_is_mark`
 therefore checks the length first -- twelve bits from `start` must be inside the strip
--- and only then the bits, which is why `n = 0` in the table above is a row 1 that is
-white from 0 to 0 and black from there rather than an empty second row.
+for a second run mark, eleven for a first run mark -- and only then the bits, which is
+why `n = 0` in the table above is a row 1 that is white from 0 to 0 and black from there
+rather than an empty second row.
 
     minimal matrix   84 / 84 rows correct (release and sanitize builds)
     sweep 16x4       34 -> 28   (k = 4, 6, 10, 16, 17, 18, 21, 22, 28, 29, 30, 33,
@@ -1358,8 +1360,9 @@ mode windows rather than mark cases, which is the debt the window sweep was writ
 measure. Nothing in this change claims them.
 
 These repairs were all built against the offset reading, and every one of them cost more
-than it fixed. Only W is in the tree. The table is kept because the halves of the
-correct rule were each guessed wrong on their own:
+than it fixed. The table is kept because the halves of the correct rule were each
+guessed wrong on their own. W is what the tree shipped on, and the paragraph after the
+candidate list spells out the leniency that now sits on top of it.
 
 | candidate | idea | gate |
 | --- | --- | --- |
@@ -1377,8 +1380,37 @@ line ends" half right and left the cursor thirteen bits on, so it fixed 2 and co
 U keeps the eleven bit accounting and gets 34 down to 7. The two halves were being
 guessed separately and they had to be measured together. W is U plus the third half --
 what the *next* line inherits -- and that half is what turns 31 gate failures into none.
-V, which detects in the first run only, restores the gate by accident: it never reaches
-the cases that need carrying, at the price of ten sweep cases U had fixed.
+
+The rule that shipped is U's leniency moved from both runs to the first run only, on
+top of W.  A mark inside a run is detected in both runs; the first run of a horizontal
+pair needs eleven bits inside the strip (the seven zero window plus its four bit tail),
+the second needs all twelve.  That one distinction is the whole gate: the nine cut
+twelve rows and the four windows 0010000, 0100010, 1001000, 1100100 end on a mark
+whose terminal one is the bit *after* the eleven that are present, and all thirteen are
+first runs, so they are marks.  Cut four ends on the same misaligned mark in the
+second run, where the strict read applies; the reference reads it as a damaged run
+too, which is why that case was never marked and agrees as a hard check.
+
+The first run has nothing to hand to the next line, so a wrong call there is confined
+to the current line: the difference between "mark" and "damaged run" in the first run
+never changes what row 1 looks like from that line's point of view, only the row
+itself.  That is why the first run rule cannot be found from output alone and had to
+be nailed down at the bit level instead.
+
+    gate at HEAD     PASS=1677 FAIL=0 known-divergent=33 fixed-since-marked=0
+    after shipping   PASS=1677 FAIL=0 known-divergent=20 fixed-since-marked=13
+    after promotion  PASS=1690 FAIL=0 known-divergent=20 fixed-since-marked=0
+
+The 13 fixed are now hard assertions in tiffutil-parity.sh: all nine reference rows at
+cut twelve, and the four first run windows 0010000, 0100010, 1001000 and 1100100,
+left the marked lists (G4KNOWN drops from 19 windows to 15).  What is left on the
+known-divergent list is the fifteen windows and the five extension codes, and NOTES
+argues those two are one debt rather than two: both are the shifted strip reading
+reaching the picture from either end.
+
+Of the candidates in the table above, V is the one worth naming against this rule: it
+detects in the first run only, restores the gate by accident because it never reaches
+the cases that need carrying, and costs ten sweep cases U had fixed.
 
 Two lessons, and the second one is the one that cost the most. A rule measured on the
 sweep alone is not yet a rule: every candidate in the table above looks right on the

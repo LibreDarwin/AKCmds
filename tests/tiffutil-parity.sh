@@ -1402,22 +1402,29 @@ G4STRUCT=00100110101010001011101000100011101000100011101000101110100010001110100
 # Every one of the 128 seven bit mode windows, against the reference row that
 # changes on every single pixel.  This is the sweep that measures how much of the
 # mode table agrees with the reference rather than assuming the rest of it, and
-# it is where the remaining known divergences live: 19 of the 128 windows decode
-# row 0 differently, and each is a pixel level difference rather than a
+# it is where the remaining known divergences live: fifteen of the 128 windows
+# decode row 0 differently, and each is a pixel level difference rather than a
 # re-encoding one.  Marked rather than dropped, and reported separately, so that
-# a 20th one shows up as a failure instead of joining them.
+# a 16th one shows up as a failure instead of joining them.
 #
 # Nine windows left this list when a mark inside a run was given the accounting
 # the reference uses: the nine whose windows are the tail of a horizontal pair,
 # where the mark lands in the second run and the pair's colour flip and endpoint
 # carry into the next line.
 #
+# Four more left when a mark whose terminal one is not the first bit it sees was
+# accepted in the first run only: 0010000, 0100010, 1001000 and 1100100 all end
+# their pair's first run, so their misaligned marks are still marks, while the
+# same four windows in the second run are still damaged runs.  The rule that
+# told them apart -- eleven bits suffice for the first run, twelve still for the
+# second -- is in NOTES.md.
+#
 # The list is measured against the shipped 16x16 fixture rather than a local one:
 # the set of divergent windows depends on the image the row is decoded into, so a
 # list measured elsewhere is not this list.
-G4KNOWN=$(printf '%s' "0001000 0001001 0010000 0100010 0110001 0110010 0110011
- 1000100 1001000 1001001 1001010 1001011 1001100 1001110 1010001 1100010
- 1100100 1110001 1110011" | tr -s '[:space:]' ' ')
+G4KNOWN=$(printf '%s' "0001000 0001001 0110001 0110010 0110011 1000100 1001001
+ 1001010 1001011 1001100 1001110 1010001 1100010 1110001 1110011" |
+    tr -s '[:space:]' ' ')
 
 for w in $(seq 0 127); do
     # printf's %07b pads with spaces rather than zeros, which would put the
@@ -1454,12 +1461,19 @@ EXPECT_DIFFER=0
 # still white cannot tell the two rules apart, these can.
 #
 # Sweeping the cut from one to sixteen instead of stopping at six is what found
-# the debt this loop is for.  Cutting twelve bits short diverges, and it had never
-# been tested; the other fifteen cuts agree.  The debt is pixel level -- the two
-# re-encodings part company at the first byte of image data -- so the earlier
-# reading of cut five as byte only, along with its note about the two files
-# differing in StripByteCounts, was wrong: differing StripByteCounts is a symptom
-# of the pixels differing, not a substitute for it.
+# the debt this loop is for.  Cutting twelve bits short diverged, and it had
+# never been tested; the other fifteen cuts agreed.  The debt was pixel level --
+# the two re-encodings part company at the first byte of image data -- so the
+# earlier reading of cut five as byte only, along with its note about the two
+# files differing in StripByteCounts, was wrong: differing StripByteCounts is a
+# symptom of the pixels differing, not a substitute for it.
+#
+# Cut twelve is now one of the agreeing cuts.  The rule that fixed it is the mark
+# inside a run rule in NOTES.md: cut twelve leaves eleven bits, its mark lands in
+# the first run of a horizontal pair, and eleven bits are exactly enough for the
+# first-run mark.  The rows that end on that mark are still asserted, as all
+# sixteen cuts and all four reference rows are, but now as hard assertions
+# rather than as a marked difference.
 #
 # Cut five used to be marked divergent here too, on the reasoning that it leaves
 # eleven bits and that eleven is a length the EOFPROBE sweep below also diverges
@@ -1476,10 +1490,7 @@ for cut in $(seq 1 16); do
         rc=${r#*:}
         eval "s_g4tc_${rn}_$cut() { s_g4 \"\$1\" && g4body \"\$1\" $rc$tc; }"
     done
-    case "$cut" in
-        12) EXPECT_DIFFER=1 ;;
-        *) EXPECT_DIFFER=0 ;;
-    esac
+    EXPECT_DIFFER=0
     for r in $G4REF; do
         check "g4cut ${r%%:*} -$cut" little "$B1G" "s_g4tc_${r%%:*}_$cut" \
             -- -none c.tiff -out o.tiff

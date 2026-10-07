@@ -899,11 +899,14 @@ Validation, all against `/usr/bin/tiffutil` as the oracle:
 - 2400 randomised round trips: random widths up to 3000, heights to 40, both
   polarities, constant and random-run pages, each through `-none`, `-lzw` and
   `-cat`.
-- `tests/tiffutil-parity.sh` passes `953/953` against the release, debug and
-  ASan/UBSan builds; the four sibling suites are unchanged at `167`, `65`,
-  `62` and `15`. Eleven of those checks are the YCbCr conversion, across the
-  default coefficients, four explicit sets, a multi-strip layout, several
-  directories in one file, a flat-luma image, and both byte orders.
+- `tests/tiffutil-parity.sh` passed `953/953` when these lines were written and
+  passes `1710/1710` today, with no marked divergences left (`known-divergent=0`,
+  `fixed-since-marked=0`), against the release, debug and ASan/UBSan builds; the
+  sibling suites read `184`, `65`, `62`, `15` and `1113` for tops, tiff2icns,
+  open, pbcopy and textutil, all FAIL=0. Eleven of the parity checks are the
+  YCbCr conversion, across the default coefficients, four explicit sets, a
+  multi-strip layout, several directories in one file, a flat-luma image, and
+  both byte orders.
 
 Characterised, and measured rather than assumed: a genuine end of line mark is
 the same twelve bits as an end of block mark, and the reference reads it as the
@@ -914,6 +917,19 @@ G4 strips" below.
 
 The G4 extension code is characterised and decoded (see "The 2D extension code"
 below).
+
+**How the decoder is shaped today.** It is a port of libtiff's own `EXPAND2D`, not a
+per-pixel line decoder: `g4_read_hrun` reads a run out of the mode tables,
+`g4_expand2d` walks runs and appends them to a run array the way `SETVALUE` does,
+and `g4_fill` turns that array into pixels once the line is closed.
+`g4_decode_line`, its `firstrow` flag and its third return value are gone, so the
+sections below that name them record how a rule was found rather than what the file
+holds. The port is what emptied the parity suite's marked lists -- fifteen windows and
+five extension codes, twenty cases that had been marked divergent at HEAD -- because
+a window is then decoded the way the reference decodes it instead of being re-derived
+from a table entry. One bug in the port survived long enough to be worth its own
+line: the entry encoding's width nibble is four bits and is masked with `0xf`;
+masking it with `0xff` let a neighbouring field into the width.
 
 ### The 2D extension code (settled by differential testing)
 
@@ -976,17 +992,24 @@ The table is complete, so there is no main-table failure path to write. That is
 also why the branch a prefix scan needed, for bits that are in no table, is gone:
 the reference has no such branch either, and every seven-bit window has an entry.
 
-**One difference remains, and it is not in the mode lookup.** A strip whose bits
+**One difference remained, and it was not in the mode lookup.** A strip whose bits
 are shifted by a few bits -- so that the codes decode, but to the wrong places --
-still diverges from the reference partway down the image. The cause is on the other
+still diverged from the reference partway down the image. The cause was on the other
 side of the decoder, not this one. libtiff keeps `b1`, the position in the row
 above, as a cursor into that row's run list: it advances it a run at a time in
 `CHECK_b1`, steps it forward once after a vertical or pass mode, and steps it
-*backwards* one run after a vertical-left mode. This decoder instead recomputes a
+*backwards* one run after a vertical-left mode. This decoder instead recomputed a
 single "next changing element" per mode from the finished reference row. The two
-agree while the codes are real, and part company once a mode is asked to step left
-of a position the reference row has no transition for, which is where the shifted
-strips separate. Closing it means carrying the cursor, not changing this table.
+agreed while the codes were real, and parted company once a mode was asked to step
+left of a position the reference row had no transition for, which is where the shifted
+strips separated. The conclusion written here was that closing it meant carrying the
+cursor, not changing this table.
+
+**It did, and the runs port is that.** `g4_expand2d` keeps `b1` as an index into the
+reference line's run array and steps it the way `CHECK_b1` does, so a mode asked to
+step left of the last transition lands where libtiff lands instead of on a re-derived
+guess. The fifteen window cases and the five extension codes recorded below went from
+marked divergent to agreeing in the same change.
 
 **A 2D extension code reaches the same fault from the other end**, and is worth
 recording separately because two separate experiments turned out to be one. Splicing
@@ -998,21 +1021,26 @@ which is what a longer prefix sliding the decoded image up one row looks like. T
 are one experiment, not two, and the twenty-six differing rows one of them reported
 were never twenty-six rows of a separate fault.
 
-Against the shipped row, five of the eight extension codes diverge: `000`, `001`,
-`010`, `100` and `101`; `011`, `110` and `111` agree. All five are pixel level, which
-is what makes them the same debt as the 28 windows above rather than a new one. An
-earlier note in this file put the count at four failing prefixes. That was measured
-on a different row and is wrong for the shipped one -- and the disagreement is the
-point, not an embarrassment to correct: which codes diverge is a property of the row
-they are spliced onto, so a list of them is only meaningful next to its fixture.
+Against the shipped row, five of the eight extension codes diverged: `000`, `001`,
+`010`, `100` and `101`; `011`, `110` and `111` agreed. All five were pixel level,
+which is what made them the same debt as the 28 windows above rather than a new one.
+**All eight agree now** -- the marked list in `tests/tiffutil-parity.sh` is empty and
+every extension code is a hard check. An earlier note in this file put the count at
+four failing prefixes. That was measured on a different row and is wrong for the
+shipped one -- and the disagreement is the point, not an embarrassment to correct:
+which codes diverge is a property of the row they are spliced onto, so a list of them
+is only meaningful next to its fixture.
 
 **How much of the table actually agrees, measured rather than argued.** The parity
 suite now decodes all 128 seven-bit windows against the reference row that changes
 on every pixel, so the claim "the table is complete" is backed by a sweep instead of
-an entry-by-entry reading. 100 of the 128 windows decode row 0 exactly as the
-reference does; **28 do not**, and each of those is a pixel-level difference, not a
-re-encoding one. Those 28 are named in `tests/tiffutil-parity.sh` and reported as
-known divergences, so a 29th fails rather than quietly joining them.
+an entry-by-entry reading. 100 of the 128 windows decoded row 0 exactly as the
+reference did; **28 did not**, each a pixel-level difference rather than a
+re-encoding one. Those 28 were named in `tests/tiffutil-parity.sh` and reported as
+known divergences, so a 29th failed rather than quietly joining them. **All 128
+agree today**: `G4KNOWN` is empty, every window is a hard check, and the gate reads
+`known-divergent=0 fixed-since-marked=0`. What closed them is the runs-based port
+recorded under "G4 decoding algorithm" above.
 
 That count is measured against the shipped 16x16 fixture and is specific to it. The
 same sweep against a different base image -- a 4-row one, as used while developing
@@ -1035,8 +1063,9 @@ differing, not a milder version of the same thing, and reading it as the milder
 thing is what kept this out of the pixel-level count.
 
 Extending the sweep from cuts one to six out to cuts one to sixteen found the rest
-of it: **cut twelve diverges too**, and had never been tested. The other fifteen cuts
-agree, so the family is one cut, not two, and it is pixel level.
+of it: **cut twelve diverged too**, and had never been tested. The other fifteen cuts
+agreed, so the family is one cut, not two, and it is pixel level. All sixteen are
+hard checks today.
 
 Cut five used to be marked divergent as well, on the reasoning that it left eleven bits
 and that eleven was a length the sweep also diverges at. That was a real cut and it
@@ -1129,13 +1158,14 @@ look: whatever disagrees is not the cursor, since with no row above the cursor
 cannot be the input, and it is not position, since the identical bits one row down
 are fine.
 
-None of that makes it urgent to fix. Height is irrelevant to it, the abort path it
+None of that made it urgent to fix. Height is irrelevant to it, the abort path it
 lands in is already covered by the grid's extension and end of line cases, and it
-takes a deliberately mangled strip to reach. It is measured by `EOFPROBE=1`, with
+takes a deliberately mangled strip to reach. It was measured by `EOFPROBE=1`, with
 `EOFSHAPE` for the fixture, rather than folded into the gate: marking hundreds of
-divergences whose mechanism is not understood would bury the two that are. That is a
-judgement about what the debt list is for, and it is the one thing here worth
-arguing with.
+divergences whose mechanism is not understood would bury the two that are. That was a
+judgement about what the debt list is for, and it was the one thing here worth
+arguing with. **The mechanism is understood now and the sweep is clean at all five
+shapes**; see "The first line stops, and the whole strip goes with it" below.
 
 An earlier note in this file gave this as a pair of narrow boundary lists, the
 reference separating at `119..122` where we separate at `121..124`. That did not
@@ -1191,8 +1221,12 @@ every width run tried, while the identical bits on row 0 do not.
       before this fix    180 / 252
       after this fix       0 / 252
 
-So `g4_decode_line` takes a `firstrow` flag, and its mid-row mark branch paints
-the whole line in colour 0 when set. Effects, all three configurations:
+So `g4_decode_line` took a `firstrow` flag, and its mid-row mark branch painted
+the whole line in colour 0 when set. That function is gone -- the decoder is the
+runs port described under "G4 decoding algorithm" -- but the outcome it produced is
+the rule `g4_decode` follows today: a line that stops while it is still the first is
+left at the imaginary line's colour, which the old code reached by filling it by
+hand. Effects, all three configurations:
 
     full gate            PASS=1659 FAIL=0 known-divergent=51  (unchanged debt;
                            that was the state after this fix alone. The mark in a
@@ -1201,17 +1235,17 @@ the whole line in colour 0 when set. Effects, all three configurations:
     EOFPROBE 16x4 sweep  72 -> 34 failures, a strict subset: all 38 one-row
                            cases fixed, none newly broken
 
-The whole-line reset is still the wrong fix, and for the same reason this one is
+The whole-line reset was still the wrong fix, and for the same reason this one is
 right: it applies the first line's rule to every line, and costs 181 cases across
 the gate, `g4grid`, `g4win` and `g4cut` alike.
 
-What the fix does not reach is a second and separate mechanism, which is why 34
-sweep cases remain. Those are no longer row 0: row 0 now matches at every `k`, and
-the disagreement has moved to row 1. Row 0 reads its mode as horizontal and then looks
-for a white run where the mark already is; we find no run code at all, burn thirteen
-bits failing, and start row 1 at bit 16, where everything reads as zero and the line
-comes out empty. The reference's row 1 is `...............#` -- a vertical pad of one
-pixel at x=15 -- so it reads the leftovers differently.
+What that fix did not reach was a second and separate mechanism, which is why 34
+sweep cases remained. Those were no longer row 0: row 0 matched at every `k`, and
+the disagreement had moved to row 1. Row 0 read its mode as horizontal and then looked
+for a white run where the mark already is; we found no run code at all, burned thirteen
+bits failing, and started row 1 at bit 16, where everything reads as zero and the line
+comes out empty. The reference's row 1 was `...............#` -- a vertical pad of one
+pixel at x=15 -- so it read the leftovers differently.
 
 **What actually happens: the mark is spent as eleven bits, not thirteen.** The offset
 reading was wrong, and it was wrong because of a defect in the instrument rather than in
@@ -1313,9 +1347,14 @@ markers came off, and the damage is thirty one cases, not sixteen:
 with the run it already read.** A mark inside a run does not simply end the line: the
 run that was coded before it counts, the pair's colour flip stands, and the position
 and colour carry into the line the mark hands on to. That is the same accounting the
-first line branch needed and did not have. So `g4_decode_line` returns a third outcome
--- 2, meaning *the line ended in a run, and this is the state the next line starts
-from* -- and `g4_decode` clears the carried state only for an ordinary line.
+first line branch needed and did not have. So `g4_decode_line` returned a third
+outcome -- 2, meaning *the line ended in a run, and this is the state the next line
+starts from* -- and `g4_decode` cleared the carried state only for an ordinary line.
+That function is gone and the third return value with it, but the state it carried is
+not: what the mark left in the run array is what `g4_fill` paints, and `g4_decode`
+closes the line with the imaginary change and swaps the arrays so the next line reads
+it as its reference. The rule survived the rewrite as data rather than as a return
+code.
 
 The family above is the second run of the pair: `H` + `00110101` + mark spends the
 white run, so the mark lands with `r1` in hand. The minimal repro for it is one bit
@@ -1400,6 +1439,11 @@ be nailed down at the bit level instead.
     gate at HEAD     PASS=1677 FAIL=0 known-divergent=33 fixed-since-marked=0
     after shipping   PASS=1677 FAIL=0 known-divergent=20 fixed-since-marked=13
     after promotion  PASS=1690 FAIL=0 known-divergent=20 fixed-since-marked=0
+    runs port        PASS=1690 FAIL=0 known-divergent=0  fixed-since-marked=20
+                     (the twenty had agreed with the port but were still marked;
+                      the ones above count as PASS, so 1690 + 20 = 1710 once
+                      they are hard checks)
+    now              PASS=1710 FAIL=0 known-divergent=0  fixed-since-marked=0
 
     sweep 16x4       34 -> 28 under W -> 16 under this rule (k = 10, 18, 21, 22,
                      30, 33, 34, 42, 45, 46, 54, 57, 58, 66, 69, 70), all pixel
@@ -1407,13 +1451,19 @@ be nailed down at the bit level instead.
                      U scored 7 on the same sweep and cost sixteen gate cases;
                      the sweep is not the arbiter, but 16 against 28 is still
                      the first candidate to improve both numbers at once.
+                     The runs port moved it back to 38, a regression it paid for
+                     by closing the twenty marked gate cases; the first line stop
+                     rule below then took it to 0, at every height.
 
 The 13 fixed are now hard assertions in tiffutil-parity.sh: all nine reference rows at
 cut twelve, and the four first run windows 0010000, 0100010, 1001000 and 1100100,
-left the marked lists (G4KNOWN drops from 19 windows to 15).  What is left on the
-known-divergent list is the fifteen windows and the five extension codes, and NOTES
-argues those two are one debt rather than two: both are the shifted strip reading
-reaching the picture from either end.
+left the marked lists (G4KNOWN drops from 19 windows to 15).  What was left on the
+known-divergent list after that was the fifteen windows and the five extension codes,
+and NOTES argued those two were one debt rather than two: both the shifted strip
+reading reaching the picture from either end. **Nothing is left on the list now.**
+The runs port emptied `G4KNOWN` and `G4EXTKNOWN`, so all 128 windows and all eight
+extension codes are hard checks, and the argument about whether they were one debt or
+two is settled by neither of them being debt any more.
 
 Of the candidates in the table above, V is the one worth naming against this rule: it
 detects in the first run only, restores the gate by accident because it never reaches
@@ -1436,6 +1486,63 @@ blank each one through the branch documented above. The trace harness has been f
 take `firstrow` as an argument defaulting to 0; the check that it works is that it now
 reports hits, and the check that it is measuring the right thing is that those hits land
 on rows the reference actually produces.
+
+#### The first line stops, and the whole strip goes with it
+
+The sweep above was left with an understood shape and an unexplained mechanism: only
+row 0 ever diverges, only on strips whose payload is genuinely cut short, and nothing
+about a `b1` cursor or a mode table accounts for it. The mechanism is that the
+reference reports the strip as unreadable when the *first* line stops unfinished, and
+the tool then writes a strip it never filled.
+
+Two measurements settle it. The first is the reference's own decoder, which the oracle
+reaches through ImageIO but which can be asked directly -- Homebrew libtiff 4.7.2, on
+one of the failing truncations (row 0's payload cut short with the mark appended,
+`16,4,1,1,1`):
+
+    $ tiffcp c.tiff out.tif
+    Fax4Decode: Bad code word at line 0 of strip 0 (x 2).
+    Fax4Decode: Warning, Premature EOL at line 0 of strip 0 (got 2, expected 16).
+    c.tiff: Error, can't read strip 0.
+    $ echo $?
+    1
+
+The warning is `CLEANUP_RUNS`' own `badlength` report: the line stopped with `a0` at
+2 of 16, so libtiff appends the colour 0 run and the padding run and still returns
+-1, because `Fax4Decode`'s end of block path returns `sp->line ? 1 : -1` and at line 0
+that is -1. A stop on any *later* line returns +1 instead, and rows past such a stop
+are left at the all colour 0 line the decoder starts from -- which is the asymmetry
+the sweep shows from the other end: the same bits repeated one row down agree.
+
+The second is the tool. `/usr/bin/tiffutil -none c.tiff -out o.tiff` on that same
+input prints nothing but `1 image written to o2.tiff.`, exits 0, and writes a strip
+whose four rows are all `0000000000000000`: the bytes of the imaginary line, not the
+runs the stop left behind. It raises none of the errors libtiff raises, and it keeps
+none of the partial line either.
+
+What we did instead was paint line 0 with those runs, so a truncation whose painted
+line 0 contained a black pixel came out black where the reference came out blank, and
+one whose line 0 was all colour 0 agreed by accident. That is why the failing `k`
+looked arbitrary: the set is "the first line stopped", and the pixels merely decided
+whether stopping was visible.
+
+The rule `g4_decode` follows now is one line: a line that stops before it is finished
+is only filled when some line has already been filled. Rows a stop never reaches were
+already the imaginary line's colour, so nothing else moves, and the conversion still
+succeeds -- the tool exits 0 with no message, as the reference does. For one bit of
+gray the tool writes photometric 1, where colour 0 and a zero byte are the same
+bytes, so the two readings of the blank -- the colour the line started in, and the
+zeros a buffer that was never written holds -- cannot be told apart from the file.
+The rule is stated as the imaginary line's colour because that is what the rest of
+the strip already is.
+
+    sweep before this rule    16x4   38 failing k
+    after this rule           16x1 16x2 16x4 16x8 16x16   0 failing k, each
+    gate                      PASS=1710 FAIL=0 known-divergent=0
+                              fixed-since-marked=0
+
+The five-shape table above is the fault as it was originally found, before the first
+line fix; it is history, not a current measurement. Every shape reads zero today.
 
 ### Damaged G4 strips
 
@@ -1642,8 +1749,9 @@ Measured against the reference after the fix:
   widths either side of every makeup boundary (63/64, 127/128, 255/256,
   511/512, 1023/1024, 1727/1728/1792, 2559/2560/2561).
 - 333/333 in `tests/tiffutil-parity.sh` at the point the encoder landed, which
-  then carried 51 one-bit-gray cases. The suite has grown since, to 953 checks
-  including a report sweep, and passes in full against the release, debug and
+  then carried 51 one-bit-gray cases. The suite has grown since -- 953 checks
+  including a report sweep at an earlier checkpoint, 1710 today with no marked
+  divergences left -- and passes in full against the release, debug and
   ASan/UBSan builds.
 
 The decoder added a third error of the same kind, worth recording because its

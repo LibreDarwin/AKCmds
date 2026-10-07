@@ -1401,16 +1401,17 @@ G4STRUCT=00100110101010001011101000100011101000100011101000101110100010001110100
 
 # Every one of the 128 seven bit mode windows, against the reference row that
 # changes on every single pixel.  This is the sweep that measures how much of the
-# mode table agrees with the reference rather than assuming the rest of it, and
-# it is where the remaining known divergences live: fifteen of the 128 windows
-# decode row 0 differently, and each is a pixel level difference rather than a
-# re-encoding one.  Marked rather than dropped, and reported separately, so that
-# a 16th one shows up as a failure instead of joining them.
+# mode table agrees with the reference rather than assuming the rest of it.
 #
-# Nine windows left this list when a mark inside a run was given the accounting
-# the reference uses: the nine whose windows are the tail of a horizontal pair,
-# where the mark lands in the second run and the pair's colour flip and endpoint
-# carry into the next line.
+# All 128 agree, so the list below is empty and every window is a hard check: a
+# window that stops agreeing now fails instead of quietly joining the debt.  The
+# list, the case that reads it and the FIXED line it reports are left in place so
+# that marking a window again is one entry rather than a change of structure.
+#
+# Windows have left this list three times.  Nine left when a mark inside a run
+# was given the accounting the reference uses: the nine whose windows are the
+# tail of a horizontal pair, where the mark lands in the second run and the
+# pair's colour flip and endpoint carry into the next line.
 #
 # Four more left when a mark whose terminal one is not the first bit it sees was
 # accepted in the first run only: 0010000, 0100010, 1001000 and 1100100 all end
@@ -1419,12 +1420,16 @@ G4STRUCT=00100110101010001011101000100011101000100011101000101110100010001110100
 # told them apart -- eleven bits suffice for the first run, twelve still for the
 # second -- is in NOTES.md.
 #
+# The last fifteen, which is what the list held when it was emptied, went with
+# the rewrite of g4_expand2d to the reference's own accounting: it walks runs
+# rather than pixels, so a window is decoded the way the reference decodes it
+# instead of being re-derived from the table entry.  That count is this sweep's
+# measurement against this fixture, not a property of the windows.
+#
 # The list is measured against the shipped 16x16 fixture rather than a local one:
 # the set of divergent windows depends on the image the row is decoded into, so a
 # list measured elsewhere is not this list.
-G4KNOWN=$(printf '%s' "0001000 0001001 0110001 0110010 0110011 1000100 1001001
- 1001010 1001011 1001100 1001110 1010001 1100010 1110001 1110011" |
-    tr -s '[:space:]' ' ')
+G4KNOWN=""
 
 for w in $(seq 0 127); do
     # printf's %07b pads with spaces rather than zeros, which would put the
@@ -1505,15 +1510,16 @@ EXPECT_DIFFER=0
 # company -- they agree on the first row and separate from there down.
 #
 # No encoder emits one of these mid strip, so this reaches the same fault as the
-# window sweep below from the other end: the codes still resolve, but they
+# window sweep above from the other end: the codes still resolve, but they
 # resolve to the wrong places.  Which extension codes diverge is a property of
 # the row they are spliced onto, not of the codes, so this list was measured
 # here rather than carried over from the same experiment run against a different
-# row -- where a sixth family diverged.  All five are pixel level differences,
-# not re-encodings, which is what makes them the same debt as the window list
-# rather than a new one.
+# row -- where a sixth family diverged.  All eight agree now, so the list is
+# empty and every extension code is a hard check, for the same reason the window
+# list is: a code that stops agreeing fails rather than joining the debt, and
+# marking one again is a single entry rather than a change of structure.
 G4EX=0000001                              # a 2D extension code, seven bits
-G4EXTKNOWN=$(printf '%s' "000 001 010 100 101" | tr -s '[:space:]' ' ')
+G4EXTKNOWN=""
 for x in 000 001 010 011 100 101 110 111; do
     eval "s_g4e_$x() { s_g4 \"\$1\" && g4body \"\$1\" ${G4EX}${x}$G4STRUCT; }"
     case " $G4EXTKNOWN " in
@@ -1536,10 +1542,10 @@ EXPECT_DIFFER=0
 #   16x1  113 bits  fail=38  k in 11-14, 23-26, 35-38, 47-50, 59-62, 71-88
 #
 # Those five rows are the fault as it was found, before the mark rules in
-# NOTES.md shipped.  Run today it reports 16 failures, at k = 10, 18, 21, 22,
-# 30, 33, 34, 42, 45, 46, 54, 57, 58, 66, 69, 70 -- every one of them inside
-# the ranges above and every one pixel level.  The table stays as a record of
-# where the fault was; the sixteen are where it still is.
+# NOTES.md shipped.  Run today none of them reports a failure, including the
+# sixteen this sweep was reporting at k = 10, 18, 21, 22, 30, 33, 34, 42, 45,
+# 46, 54, 57, 58, 66, 69, 70 -- every one of them inside the ranges above and
+# every one pixel level.  The table stays as a record of where the fault was.
 #
 # Read the strip before reading the numbers, or the numbers mislead.  The strip
 # is payload + EOFB + EOFB, and for width 16 the payload is 89 bits for row 0 --
@@ -1556,10 +1562,14 @@ EXPECT_DIFFER=0
 # mode windows turn on.  And on that single row the failing k are congruent to
 # 11, 0, 1 or 2 modulo twelve, twelve being the width of the mark.
 #
-# Not marked as debt: the mechanism is still not understood, the abort path it
-# lands in is already covered by the grid's extension and end of line cases, and
-# marking hundreds of unexplained marked cases would bury the two faults that
-# are understood.
+# What the mechanism turned out to be: a truncation that stops the first line
+# makes the reference's own decoder report the strip unreadable, and the tool
+# then writes a strip it never filled -- all zeros, exit status 0, no message --
+# where we painted line 0 with the runs the stop had left behind.  Rows the stop
+# never reached were already the colour they are left in, so only the k whose
+# painted line 0 contained a black pixel could show a difference.  g4_decode now
+# leaves line 0 alone when it stops unfinished, and all five shapes report
+# fail=0 rather than the counts above.
 if [ -n "${EOFPROBE-}" ]; then
     B4="${EOFSHAPE:-16,4,1,1,1}"
     rm -rf "$ROOT/e"; mkdir -p "$ROOT/e"

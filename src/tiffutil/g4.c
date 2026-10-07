@@ -382,28 +382,88 @@ fail:
 /*
  * Decoding.
  *
- * Bit strings are turned into numbers once so the readers below can compare
- * values rather than walk characters.  Every table is built from the same
- * strings the encoder writes, so a stream the reference produced reads back
- * through exactly the codes it was built from.
+ * A line is expanded into runs first and painted from them afterwards, which
+ * is what the reference does: what a line codes and what a line looks like are
+ * not always the same thing, because an unreadable code word leaves the runs
+ * that were already read and the end of the line is reconciled against the
+ * width once the codes stop.  Every table is built from the same strings the
+ * encoder writes, so a stream the reference produced reads back through
+ * exactly the codes it was built from.
  */
 
+/* A reader over the strip.  The reference keeps its bits in an accumulator
+ * filled a byte at a time and asks for a fixed number of bits before each
+ * lookup: short of them it takes a byte, and with none left it either fails
+ * or, while it still holds valid bits, pads the request with zeros and lets
+ * the lookup return whatever those bits say.  Reads past the end of the strip
+ * therefore yield zeros, which is what the fill bits at the end of a stream
+ * are, and keeps a truncated strip from faulting. */
 struct bitreader {
 	const unsigned char *p;
 	size_t len;		/* bytes */
 	size_t bitpos;		/* bits consumed */
+	size_t cp;		/* bytes fetched */
+	int avail;		/* bits held, including zeros past the end */
 };
 
-/* Reads past the end of the strip yield zeros, which is what the fill bits at
- * the end of a stream are, and keeps a truncated strip from faulting. */
+/* Fails exactly where the reference's NeedBits macros do: only on entry to a
+ * request with nothing held and nothing left to fetch.  A request of eight
+ * bits or fewer needs at most one byte, a longer one at most two. */
 static int
-br_bit(struct bitreader *r)
+br_need(struct bitreader *r, unsigned n)
 {
-	size_t byte = r->bitpos >> 3;
+	if (r->avail >= (int)n)
+		return 0;
+	if (r->cp >= r->len) {
+		if (r->avail == 0)
+			return -1;
+		r->avail = (int)n;	/* pad with zeros */
+		return 0;
+	}
+	r->cp++;
+	r->avail += 8;
+	if (n > 8 && r->avail < (int)n) {
+		if (r->cp >= r->len) {
+			if (r->avail == 0)
+				return -1;
+			r->avail = (int)n;
+		} else {
+			r->cp++;
+			r->avail += 8;
+		}
+	}
+	return 0;
+}
+
+/* The bit at an absolute position, zero past the end of the strip. */
+static int
+br_bitat(const struct bitreader *r, size_t pos)
+{
+	size_t byte = pos >> 3;
 
 	if (byte >= r->len)
 		return 0;
-	return (r->p[byte] >> (7 - (r->bitpos & 7))) & 1;
+	return (r->p[byte] >> (7 - (pos & 7))) & 1;
+}
+
+/* The next n bits with the first transmitted in the low bit, which is the
+ * order the reference indexes its tables in. */
+static uint32_t
+br_peek(const struct bitreader *r, unsigned n)
+{
+	uint32_t v = 0;
+	unsigned i;
+
+	for (i = 0; i < n; i++)
+		v |= (uint32_t)br_bitat(r, r->bitpos + i) << i;
+	return v;
+}
+
+static void
+br_clr(struct bitreader *r, unsigned n)
+{
+	r->bitpos += n;
+	r->avail -= (int)n;
 }
 
 static uint32_t
@@ -431,17 +491,30 @@ struct modeent {
 	int kind;
 };
 
-struct runent {
-	uint32_t len;
-	uint32_t val;
-	uint32_t run;
-	int term;		/* a terminating code ends the run, a makeup does not */
-};
+/* The states a run table window resolves to.  A window holding no code at all
+ * stays the null entry and reads as a run of zero, and a window that opens
+ * with eleven zeros is the mark, which the run tables carry as well as the
+ * mode table does.  The mark's width is eleven so that the look up leaves its
+ * flag bit in the stream for whoever reads the mark as a mode. */
+#define G4S_NULL	0
+#define G4S_TERMW	7
+#define G4S_TERMB	8
+#define G4S_MAKEUPW	9
+#define G4S_MAKEUPB	10
+#define G4S_MAKEUP	11
+#define G4S_EOL		12
 
-#define G4_RUNTAB_MAX	128
+/* How many bits a run look up takes.  A code can be shorter than this window
+ * and the entry says how many of the bits it just looked at are its own. */
+#define G4_WWID		12
+#define G4_BWID		13
 
-static struct runent runtab[2][G4_RUNTAB_MAX];	/* [0] white, [1] black */
-static size_t runtab_n[2];
+#define G4E_STATE(e)	((e) & 0xfu)
+#define G4E_WIDTH(e)	(((e) >> 4) & 0xfu)
+#define G4E_PARAM(e)	((e) >> 8)
+
+static uint32_t g4wtab[1u << G4_WWID];
+static uint32_t g4btab[1u << G4_BWID];
 static struct modeent g4main[1 << G4_MAIN_LEN];
 static int g4_tables_ready;
 
@@ -477,22 +550,32 @@ g4_set_main(const char *bits, uint32_t len, int32_t d, int kind)
 	}
 }
 
+/* Record what every window of this width starting with this run code resolves
+ * to.  The codes are a prefix code, so the windows of two of them cannot
+ * meet. */
 static void
-g4_add_run(int pass, uint32_t len, const char *bits, uint32_t run, int term)
+g4_set_run(uint32_t *tab, uint32_t wid, const char *bits, uint32_t len,
+    uint32_t state, uint32_t param)
 {
-	struct runent *e = &runtab[pass][runtab_n[pass]++];
+	uint32_t base = g4_index(bits_value(bits, len), len);
+	uint32_t tail;
 
-	e->len = len;
-	e->val = bits_value(bits, len);
-	e->run = run;
-	e->term = term;
+	for (tail = 0; tail < (1u << (wid - len)); tail++)
+		tab[base | (tail << len)] = state | (len << 4) | (param << 8);
 }
 
+/* The mode table is read by seven bits and the run tables by twelve or
+ * thirteen, and every entry carries the state the window resolves to, the
+ * width to consume and the value the state holds.  The tables are complete
+ * over the windows their codes decide, which is why the reference has no run
+ * or main table error path a real stream can reach: a window in no code is
+ * the null entry, and it is the mark's eleven zeros that make the extension
+ * code work without a special case, since its first four bits are the pass
+ * code and seven bits hold it whole. */
 static void
 g4_build_tables(void)
 {
 	size_t i, n;
-	int pass;
 
 	if (g4_tables_ready)
 		return;
@@ -505,162 +588,272 @@ g4_build_tables(void)
 	g4_set_main(G4_EXT, G4_EXT_LEN, 0, G4M_EXT);
 	g4_set_main(G4_EOL7, G4_MAIN_LEN, 0, G4M_EOL);
 
-	for (pass = 0; pass < 2; pass++) {
-		const struct code *term = pass != 0 ? black_term : white_term;
-		const struct keyed_code *mk = pass != 0 ? makeup_black :
-		    makeup_white;
-		size_t nmk = pass != 0 ? sizeof makeup_black / sizeof *makeup_black :
-		    sizeof makeup_white / sizeof *makeup_white;
-
-		runtab_n[pass] = 0;
-		for (i = 0; i < 64; i++)
-			g4_add_run(pass, term[i].len, term[i].bits,
-			    (uint32_t)i, 1);
-		for (i = 0; i < nmk; i++)
-			g4_add_run(pass, mk[i].len, mk[i].bits, mk[i].run, 0);
-		/* The extended makeups are shared by both colours. */
-		n = sizeof makeup_ext / sizeof *makeup_ext;
-		for (i = 0; i < n; i++)
-			g4_add_run(pass, makeup_ext[i].len, makeup_ext[i].bits,
-			    makeup_ext[i].run, 0);
+	for (i = 0; i < 64; i++) {
+		g4_set_run(g4wtab, G4_WWID, white_term[i].bits,
+		    white_term[i].len, G4S_TERMW, (uint32_t)i);
+		g4_set_run(g4btab, G4_BWID, black_term[i].bits,
+		    black_term[i].len, G4S_TERMB, (uint32_t)i);
 	}
+	for (i = 0; i < sizeof makeup_white / sizeof *makeup_white; i++)
+		g4_set_run(g4wtab, G4_WWID, makeup_white[i].bits,
+		    makeup_white[i].len, G4S_MAKEUPW, makeup_white[i].run);
+	for (i = 0; i < sizeof makeup_black / sizeof *makeup_black; i++)
+		g4_set_run(g4btab, G4_BWID, makeup_black[i].bits,
+		    makeup_black[i].len, G4S_MAKEUPB, makeup_black[i].run);
+	/* The extended makeups are shared by both colours. */
+	n = sizeof makeup_ext / sizeof *makeup_ext;
+	for (i = 0; i < n; i++) {
+		g4_set_run(g4wtab, G4_WWID, makeup_ext[i].bits,
+		    makeup_ext[i].len, G4S_MAKEUP, makeup_ext[i].run);
+		g4_set_run(g4btab, G4_BWID, makeup_ext[i].bits,
+		    makeup_ext[i].len, G4S_MAKEUP, makeup_ext[i].run);
+	}
+	/* Eleven zeros are the mark whichever colour the line is in.  A
+	 * window that holds nothing but them, and one that holds them with
+	 * the bit after them still to come, both read as the mark. */
+	for (i = 0; i < (size_t)(1u << G4_WWID); i++)
+		if ((i & 0x7ffu) == 0)
+			g4wtab[i] = G4S_EOL | (11u << 4);
+	for (i = 0; i < (size_t)(1u << G4_BWID); i++)
+		if ((i & 0x7ffu) == 0)
+			g4btab[i] = G4S_EOL | (11u << 4);
 	g4_tables_ready = 1;
 }
 
-/* The reference reads seven bits, looks them up in one table, and consumes the
- * width the entry carries.  It does not read a bit at a time until a code
- * matches, and the difference is not visible on a code a real encoder emits,
- * because those are a prefix code and the two routes pick the same one.  It is
- * very visible on bits that are in no code: the reference still resolves them
- * to whatever code those seven bits hold, and goes on decoding, where a prefix
- * scan would give the line up.  The table is complete, which is why the
- * reference has no main table error path to take.
- *
- * This is also what makes the 2D extension code work without a special case,
- * even though its first four bits are the pass code 0001: seven bits hold it
- * whole. */
-static void
-g4_match_mode(struct bitreader *r, int32_t *d, int *kind)
-{
-	uint32_t acc = 0;
-	uint32_t n;
-	const struct modeent *e;
+/* The state of one line while it expands: the runs being built and the runs
+ * of the line above they are read against, pb walking the reference's changes
+ * with b1 the change it stands past, a0 the position last written, and
+ * RunLength a run read but not yet written. */
+struct g4dec {
+	struct bitreader r;
+	uint32_t *runs;		/* the line being built and the one above */
+	uint32_t *curruns;
+	uint32_t *refruns;
+	uint32_t nruns;
+	uint32_t *pa;
+	uint32_t *pb;
+	int a0;
+	int b1;
+	int lastx;
+	int RunLength;
+	int EOLcnt;
+};
 
-	g4_build_tables();
-
-	for (n = 1; n <= G4_MAIN_LEN; n++) {
-		acc = (acc << 1) | (uint32_t)br_bit(r);
-		r->bitpos++;
-	}
-	e = &g4main[g4_index(acc, G4_MAIN_LEN)];
-	*d = e->d;
-	*kind = e->kind;
-	/* The entry's width can be shorter than the look ahead, and an end of
-	 * block mark reads four more bits after it. */
-	r->bitpos -= G4_MAIN_LEN - e->len;
-	if (e->kind == G4M_EOL)
-		r->bitpos += G4_EOL_TAIL;
-}
-
-/* Whether the eleven bits from start really are the start of an end of block
- * mark.  A seven zero window is not enough on its own: a strip whose codes run
- * out in the middle of a mark leaves the same seven zeros and then nothing,
- * and the reference reads that as a damaged run rather than as a mark.  br_bit
- * answers zero past the end, so the length has to be checked before the bits.
- * In the first run of a horizontal pair the reference also accepts a mark
- * whose terminal one is not the next bit -- the window is the one bit short of
- * the pair's end, and the EOFB its codes ran against was truncated -- so a
- * first run only checks the eleven bits.  In the second run the twelve bits
- * really have to be there and the bit after the tail has to be one; a mark
- * that lands late there is a damaged run, as a stripped down first run check
- * would have enjoyed.  Both spend the same eleven bits. */
+/* Append a run and move the line on.  Every write the reference guards with
+ * the end of the run array is guarded here the same way, and the failure it
+ * gives back is the strip's, not the line's. */
 static int
-g4_is_mark(struct bitreader *r, size_t start, int first)
+g4_setvalue(struct g4dec *d, int x)
 {
-	size_t save = r->bitpos;
-	int i;
-
-	if (start + G4_MAIN_LEN + G4_EOL_TAIL + (first ? 0 : 1) >
-	    r->len * 8) {
-		r->bitpos = save;
-		return 0;
-	}
-	r->bitpos = start + G4_MAIN_LEN;
-	for (i = 0; i < G4_EOL_TAIL; i++, r->bitpos++)
-		if (br_bit(r) != 0)
-			goto no;
-	if (!first && br_bit(r) != 1)
-		goto no;
-	r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
-	return 1;
-no:
-	r->bitpos = save;
+	if (d->pa >= d->curruns + d->nruns)
+		return -1;
+	*d->pa++ = (uint32_t)(d->RunLength + x);
+	d->a0 += x;
+	d->RunLength = 0;
 	return 0;
 }
 
+/* Bring b1 up to the first change of the reference line at or past a0, which
+ * is what a vertical code measures from.  Nothing walks the reference until a
+ * run has been written, because then a0 is the imaginary pixel before the
+ * line and the reference's first change already stands. */
 static int
-g4_match_run(struct bitreader *r, int pass, uint32_t *run, uint32_t *term,
-    int *mark, int first)
+g4_check_b1(struct g4dec *d)
 {
-	uint32_t acc = 0;
-	uint32_t n;
-	size_t i;
-	size_t start = r->bitpos;
-
-	*mark = 0;
-	g4_build_tables();
-	for (n = 1; n <= 13; n++) {
-		acc = (acc << 1) | (uint32_t)br_bit(r);
-		r->bitpos++;
-		/* No run code begins with seven zeros: the longest leading
-		 * zero run any of them has is six, so a seven zero window
-		 * inside a run can only be the start of an end of block mark,
-		 * and then only if the bits really are there.  The reference
-		 * spends on it the same bits it spends on one read as a mode:
-		 * the seven it looked at plus the four after them. */
-		if (n == G4_MAIN_LEN && acc == 0 && g4_is_mark(r, start,
-		    first)) {
-			r->bitpos = start + G4_MAIN_LEN + G4_EOL_TAIL;
-			*mark = 1;
-			return -1;
+	if (d->pa != d->curruns)
+		while (d->b1 <= d->a0 && d->b1 < d->lastx) {
+			if (d->pb + 1 >= d->refruns + d->nruns)
+				return -1;
+			d->b1 += d->pb[0] + d->pb[1];
+			d->pb += 2;
 		}
-		for (i = 0; i < runtab_n[pass]; i++)
-			if (runtab[pass][i].len == n &&
-			    runtab[pass][i].val == acc) {
-				*run = runtab[pass][i].run;
-				*term = runtab[pass][i].term;
-				return 0;
-			}
-	}
-	return -1;
+	return 0;
 }
 
-/* A run is a series of makeups and then, always, exactly one terminating code.
- * The reference emits that terminator even when a makeup has already covered the
- * run, so a decoder that stops at the makeup leaves the line short by it and
- * reads the rest of the strip as the wrong pixels. */
+/* Reconcile what the codes read against the width, which happens to every
+ * line whether the codes ended or the line gave up: a run read but never
+ * written is written, runs standing past the width are dropped back, and a
+ * line short of the width is closed out to it.  What comes out is what the
+ * row is painted from and what the next line reads as its reference. */
 static int
-g4_read_run(struct bitreader *r, int pass, uint32_t *run, int *mark, int first)
+g4_cleanup(struct g4dec *d)
 {
-	uint32_t total = 0;
-	int i;
-
-	*mark = 0;
-	/* Every makeup is worth at least 64, so this covers any run a line can
-	 * hold while still bounding a damaged strip. */
-	for (i = 0; i < 256; i++) {
-		uint32_t got;
-		uint32_t term;
-
-		if (g4_match_run(r, pass, &got, &term, mark, first) < 0)
-			return -1;
-		total += got;
-		if (term) {
-			*run = total;
-			return 0;
+	if (d->RunLength != 0 && g4_setvalue(d, 0) < 0)
+		return -1;
+	if (d->a0 != d->lastx) {
+		while (d->a0 > d->lastx && d->pa > d->curruns)
+			d->a0 -= *--d->pa;
+		if (d->a0 < d->lastx) {
+			if (d->a0 < 0)
+				d->a0 = 0;
+			if (((d->pa - d->curruns) & 1) != 0 &&
+			    g4_setvalue(d, 0) < 0)
+				return -1;
+			if (g4_setvalue(d, d->lastx - d->a0) < 0)
+				return -1;
+		} else if (d->a0 > d->lastx) {
+			if (g4_setvalue(d, d->lastx) < 0)
+				return -1;
+			if (g4_setvalue(d, 0) < 0)
+				return -1;
 		}
 	}
-	return -1;
+	return 0;
+}
+
+/* Read one run: the makeups and then always exactly one terminating code,
+ * which is what the reference reads even when a makeup has already covered
+ * the run, because a decoder that stops at the makeup would leave the line
+ * short by it and read the rest of the strip as the wrong pixels.  0 is a
+ * run, 1 the strip ran out, 2 a window that is in no code, -1 the line wrote
+ * past its runs. */
+static int
+g4_read_hrun(struct g4dec *d, const uint32_t *tab, unsigned wid)
+{
+	for (;;) {
+		uint32_t e;
+
+		if (br_need(&d->r, wid) < 0)
+			return 1;
+		e = tab[br_peek(&d->r, wid)];
+		br_clr(&d->r, G4E_WIDTH(e));
+		switch (G4E_STATE(e)) {
+		case G4S_TERMW:
+		case G4S_TERMB:
+			return g4_setvalue(d, (int)G4E_PARAM(e));
+		case G4S_MAKEUPW:
+		case G4S_MAKEUPB:
+		case G4S_MAKEUP:
+			d->a0 += (int)G4E_PARAM(e);
+			d->RunLength += (int)G4E_PARAM(e);
+			break;
+		default:
+			return 2;
+		}
+	}
+}
+
+/* Expand one line into runs.  The reference reads its bits least significant
+ * bit first, so the first bit of a code is the low bit of the index it looks
+ * that code up by, and it does not read a bit at a time until a code matches:
+ * seven bits are looked up in one table and the width the entry carries is
+ * consumed, which is the same route on a code a real encoder emits because
+ * those are a prefix code, and a very different one on bits that are in no
+ * code, since the look up still resolves them to whatever those seven bits
+ * hold and goes on decoding.  A horizontal mode then reads the pair of runs
+ * after it, and whatever stops the line -- the codes running out, the mark, a
+ * code word the tables reject -- the line is reconciled against the width by
+ * g4_cleanup.  0 is a line that ended, 1 the strip ran out in the middle of
+ * it, -1 the line wrote past its runs. */
+static int
+g4_expand2d(struct g4dec *d)
+{
+	while (d->a0 < d->lastx) {
+		const struct modeent *m;
+		int rc, param;
+
+		if (d->pa >= d->curruns + d->nruns)
+			return -1;
+		if (br_need(&d->r, G4_MAIN_LEN) < 0)
+			goto eof2d;
+		m = &g4main[br_peek(&d->r, G4_MAIN_LEN)];
+		br_clr(&d->r, m->len);
+		switch (m->kind) {
+		case G4M_PASS:
+			if (g4_check_b1(d) < 0)
+				return -1;
+			if (d->pb + 1 >= d->refruns + d->nruns)
+				return -1;
+			d->b1 += *d->pb++;
+			d->RunLength += d->b1 - d->a0;
+			d->a0 = d->b1;
+			d->b1 += *d->pb++;
+			break;
+		case G4M_HORIZ:
+			/* The pair runs in the colour the line's last run
+			 * left it in, and only one of the two is read when
+			 * the first one does not finish. */
+			if ((d->pa - d->curruns) & 1) {
+				rc = g4_read_hrun(d, g4btab, G4_BWID);
+				if (rc == 0)
+					rc = g4_read_hrun(d, g4wtab, G4_WWID);
+			} else {
+				rc = g4_read_hrun(d, g4wtab, G4_WWID);
+				if (rc == 0)
+					rc = g4_read_hrun(d, g4btab, G4_BWID);
+			}
+			if (rc == 1)
+				goto eof2d;
+			if (rc < 0)
+				return -1;
+			if (rc == 2)
+				goto bad2d;
+			if (g4_check_b1(d) < 0)
+				return -1;
+			break;
+		case G4M_VERT:
+			param = m->d < 0 ? -m->d : m->d;
+			if (g4_check_b1(d) < 0)
+				return -1;
+			if (m->d < 0) {
+				/* A left vertical stands at b1 less its
+				 * offset and takes the reference back one
+				 * change, past the reference's start into
+				 * the end of the array the two share. */
+				if (d->b1 < d->a0 + param)
+					goto bad2d;
+				if (g4_setvalue(d, d->b1 - d->a0 - param) < 0)
+					return -1;
+				d->b1 -= *--d->pb;
+				break;
+			}
+			if (g4_setvalue(d, d->b1 - d->a0 + param) < 0)
+				return -1;
+			if (d->pb >= d->refruns + d->nruns)
+				return -1;
+			d->b1 += *d->pb++;
+			break;
+		case G4M_EXT:
+			/* The rest of the line stands where it is: the run
+			 * left over is written without moving a0, so the
+			 * line closes short and cleanup brings it to the
+			 * width from there. */
+			*d->pa++ = (uint32_t)(d->lastx - d->a0);
+			goto eol2d;
+		case G4M_EOL:
+			*d->pa++ = (uint32_t)(d->lastx - d->a0);
+			if (br_need(&d->r, G4_EOL_TAIL) < 0)
+				goto eof2d;
+			br_clr(&d->r, G4_EOL_TAIL);
+			d->EOLcnt = 1;
+			goto eol2d;
+		default:
+			goto bad2d;
+		}
+	}
+	/* A run read but never terminated still stands when the modes stop,
+	 * and the reference only looks for the bit that would close it when
+	 * the line has the room to close in. */
+	if (d->RunLength != 0) {
+		if (d->RunLength + d->a0 < d->lastx) {
+			if (br_need(&d->r, 1) < 0)
+				goto eof2d;
+			if (br_peek(&d->r, 1) == 0)
+				goto bad2d;
+			br_clr(&d->r, 1);
+		}
+		if (g4_setvalue(d, 0) < 0)
+			return -1;
+	}
+bad2d:
+eol2d:
+	if (g4_cleanup(d) < 0)
+		return -1;
+	return 0;
+eof2d:
+	if (g4_cleanup(d) < 0)
+		return -1;
+	return 1;
 }
 
 /* Fill [from, to) of a byte per pixel row with one colour.  A pixel of colour
@@ -677,205 +870,36 @@ g4_paint(unsigned char *row, int32_t from, int32_t to, int colour, int invert)
 	    (size_t)(to - from));
 }
 
-/* One coding line.  Colour 0 is the colour a line starts in, and the reference
- * line is the previously decoded row, or an imaginary all colour 0 line for the
- * first.  A vertical code carries a1 - b1, so a1 comes from b1 and not from
- * a0; a0 and b1 differ on the first element of a line, where a0 is the
- * imaginary pixel at -1 and b1 is the reference line's first change.
- *
- * Returns 1 for an end of block mark, which ends the strip rather than just
- * this line, 0 for a line that ran out or ended, -1 for a strip too damaged
- * to decode at all, and 2 for a line that ended inside a run with a mark, where
- * the position and colour the line had reached carry over to the line the mark
- * hands on to.  A line that ends early keeps the rest of its width in the
- * colour current at that point, which is what the reference does with one it
- * cannot read the rest of.  firstrow says whether this is the strip's first
- * line, which a mark that interrupts it treats differently.  a0s and colours
- * hold the position and colour the line starts from and are updated only for
- * the 2 case. */
-static int
-g4_decode_line(struct bitreader *r, unsigned char *row, const unsigned char *ref,
-    uint32_t width, int invert, int firstrow, int32_t *a0s, int *colours)
+/* Paint the row from its runs: colour 0 then colour 1, in pairs, from the
+ * left.  A run that would paint past the width is cut back to it and the cut
+ * is written into the array, because the next line reads these runs as its
+ * reference.  An odd count means the line never finished its second colour,
+ * and the missing colour 0 run closes it. */
+static void
+g4_fill(unsigned char *row, uint32_t *runs, uint32_t *erun, uint32_t lastx,
+    int invert)
 {
-	int32_t a0 = *a0s;
-	int colour = *colours;
-	uint64_t guard;
+	uint32_t x = 0;
+	uint32_t run;
 
-	/* A well formed line codes at most one element per pixel plus a
-	 * little slack; the bound only exists to stop a damaged strip from
-	 * spinning here. */
-	for (guard = 0; guard < (uint64_t)width * 4 + 64; guard++) {
-		int32_t a1, a2, b1, b2, from;
-		int kind;
-		int32_t d;
-
-		if (a0 >= (int32_t)width) {
-			/* A finished line is followed either by the next
-			 * line's codes or by the end of block mark that
-			 * ends the strip.  The reference reads that mark
-			 * off before it moves on, so it has to be consumed
-			 * here or the next line would start on the wrong
-			 * bit. */
-			size_t save = r->bitpos;
-
-			g4_match_mode(r, &d, &kind);
-			if (kind == G4M_EOL)
-				return 1;
-			r->bitpos = save;
-			return 0;
+	if ((erun - runs) & 1)
+		*erun++ = 0;
+	for (; runs < erun; runs += 2) {
+		run = runs[0];
+		if (x + run > lastx || run > lastx)
+			run = runs[0] = lastx - x;
+		if (run) {
+			g4_paint(row, (int32_t)x, (int32_t)(x + run), 0, invert);
+			x += runs[0];
 		}
-		from = a0 < 0 ? 0 : a0;
-		b1 = (int32_t)next_change(ref, width, a0, colour, invert);
-		g4_match_mode(r, &d, &kind);
-		if (kind == G4M_EOL) {
-			if (firstrow) {
-				/* The first line of a strip is the one line
-				 * the reference does not pad: a mark landing
-				 * partway down it leaves it at the all colour
-				 * 0 it starts from, so none of the codes the
-				 * line had already coded survives.  Every
-				 * other line pads in the colour it had
-				 * reached, below.  See NOTES.md. */
-				g4_paint(row, 0, (int32_t)width, 0, invert);
-				return 1;
-			}
-			/* An end of block ends the strip, and the line it
-			 * interrupts is finished off in the colour it was
-			 * in rather than abandoned: the reference pads the
-			 * rest of the row before it stops, so a mark that
-			 * lands partway down a line does not throw away
-			 * the colour the line had reached.  Only rows the
-			 * mark stops before ever starting stay at the all
-			 * colour 0 line they begin from, and those are
-			 * handled by the branch above. */
-			g4_paint(row, from, (int32_t)width, colour, invert);
-			return 1;
-		}
-		if (kind == G4M_EXT) {
-			/* The extension code ends the line: the reference
-			 * gives the rest of it the colour it was in and
-			 * stops, without reading the uncompressed data it
-			 * stands for. */
-			g4_paint(row, from, (int32_t)width, colour, invert);
-			return 0;
-		}
-		if (kind == G4M_PASS) {
-			b2 = (int32_t)next_any(ref, width, (uint32_t)b1, invert);
-			if (b2 > (int32_t)width)
-				b2 = (int32_t)width;
-			if (b2 <= a0)
-				b2 = a0 + 1;
-			g4_paint(row, from, b2, colour, invert);
-			a0 = b2;
-			continue;
-		}
-		if (kind == G4M_VERT) {
-			a1 = b1 + d;
-			if (a1 < from) {
-				/* A vertical mode that would step left of
-				 * where this line has already painted ends
-				 * the line instead of moving: the reference
-				 * stops there and goes on to the next one.
-				 * Clamping back to the start of the run
-				 * instead paints the whole line that one
-				 * colour, which is a solid line where the
-				 * reference leaves white.  The step only
-				 * ever runs left, so this cannot catch a
-				 * forward mode.  The remainder of the row
-				 * is left as it stands rather than filled
-				 * in with the colour the line had reached;
-				 * see NOTES.md. */
-				a0 = (int32_t)width;
-				continue;
-			}
-			if (a1 > (int32_t)width) {
-				/* Symmetrically, a step right past the line's
-				 * end stops it instead of clamping to it.  b1 at
-				 * width means the reference's run of this colour
-				 * reaches the end of the line, so b1 + d for any
-				 * d above 0 is beyond it.  Clamping would fill
-				 * the rest of the line with the colour it had
-				 * reached; the reference leaves it as it stands,
-				 * which a left step to b1 - n followed by a right
-				 * one shows, the line having already painted up
-				 * to b1 - n.  See NOTES.md. */
-				a0 = (int32_t)width;
-				continue;
-			}
-			g4_paint(row, from, a1, colour, invert);
-			a0 = a1;
-			colour ^= 1;
-			continue;
-		}
-		/* Horizontal: two runs, the second completing the pair. */
-		{
-			uint32_t r1 = 0, r2 = 0;
-			int mark;
-			int infirst = 1;
-			int nread = g4_read_run(r, colour, &r1, &mark, 1);
-
-			if (nread >= 0 && !mark) {
-				infirst = 0;
-				nread = g4_read_run(r, colour ^ 1, &r2,
-				    &mark, 0);
-			}
-			if (nread < 0 || mark) {
-				int32_t a;
-
-				/* Same as an unreadable mode word: the line
-				 * ends where the codes do, and the rest of
-				 * the row is left as it stands rather than
-				 * filled in with the colour the line had
-				 * reached.  See NOTES.md.  A mark inside a
-				 * run ends the line the way one read as a
-				 * mode does, except that the next line
-				 * still follows: the mark is only
-				 * consumed, it does not end the strip. */
-				if (!mark || infirst)
-					/* Nothing was coded, so the line the
-					 * mark hands on to starts from the
-					 * beginning like any other. */
-					return 0;
-				/* The run the pair did read still counts.
-				 * It is painted, the pair's colour flip
-				 * stands, and both carry into the line the
-				 * mark hands on to -- which is why `H` and a
-				 * white run and a mark leaves the next line
-				 * black from where the run ended rather than
-				 * leaving it blank. */
-				a = from + (int32_t)r1;
-				if (a > (int32_t)width)
-					a = (int32_t)width;
-				g4_paint(row, from, a, colour, invert);
-				*a0s = a;
-				*colours = colour ^ 1;
-				return 2;
-			}
-			a1 = from + (int32_t)r1;
-			a2 = a1 + (int32_t)r2;
-			if (a1 < from)
-				a1 = from;
-			if (a2 > (int32_t)width) {
-				/* A pair of runs that together overrun the
-				 * line is not a line at all.  The reference
-				 * ends the line where the pair begins and
-				 * fills the rest of it in the colour it had
-				 * reached, so none of the pair survives; we
-				 * used to clamp the pair to the width
-				 * instead, which keeps a tail of it and
-				 * turns a line the reference leaves white
-				 * into a marked one.  A pair that ends
-				 * exactly on the width is still good. */
-				g4_paint(row, from, (int32_t)width, colour,
-				    invert);
-				return 0;
-			}
-			g4_paint(row, from, a1, colour, invert);
-			g4_paint(row, a1, a2, colour ^ 1, invert);
-			a0 = a2;
+		run = runs[1];
+		if (x + run > lastx || run > lastx)
+			run = runs[1] = lastx - x;
+		if (run) {
+			g4_paint(row, (int32_t)x, (int32_t)(x + run), 1, invert);
+			x += runs[1];
 		}
 	}
-	return -1;
 }
 
 /* Packs the byte per pixel rows into the one bit per sample, most significant
@@ -908,66 +932,92 @@ g4_pack(const unsigned char *px, uint32_t width, uint32_t height)
 /* Decode one strip.  Each strip starts over from the imaginary line, as T.4
  * says, so `rows` is the row count of this strip rather than of the image.
  * Rows come back packed and byte aligned, which is what the concatenating
- * caller needs in order to widen the samples a row at a time. */
+ * caller needs in order to widen the samples a row at a time.  A strip whose
+ * codes stop part way through is read for as far as they go, and the rows it
+ * never reaches keep the imaginary line's colour.  A strip whose very first
+ * line stops keeps it everywhere -- line 0 as well -- because the reference
+ * reports such a strip unreadable and writes the strip it never filled. */
 int
 g4_decode(const unsigned char *in, size_t inlen, uint32_t width, uint32_t rows,
     int invert, unsigned char **out, size_t *outlen)
 {
-	struct bitreader r;
-	unsigned char *px, *imageline, *packed;
-	uint32_t y;
-	int32_t a0;
-	int colour;
+	struct g4dec d;
+	unsigned char *px, *packed;
+	uint32_t nruns, y;
 
 	*out = NULL;
 	*outlen = 0;
 	if (width == 0 || rows == 0)
 		return 0;
+	/* The reference refuses a row count its run arrays cannot size, and
+	 * this is where both of its roundings first overflow. */
+	if (width >= 0x7fffffe0u)
+		return -1;
+	nruns = ((width + 1 + 31) / 32) * 32 * 2;
+	memset(&d, 0, sizeof d);
 	if ((px = malloc((size_t)width * rows)) == NULL)
 		return -1;
-	if ((imageline = malloc(width)) == NULL) {
+	/* One allocation holds the line being built and the line above it,
+	 * because a left vertical reads one change past the start of the
+	 * reference and that is the end of the array the two share. */
+	if ((d.runs = calloc((size_t)nruns * 2, sizeof *d.runs)) == NULL) {
 		free(px);
 		return -1;
 	}
 	/* The line above the first is the same all colour 0 line the encoder
-	 * assumes, so a stream this codec wrote decodes back to it.  Rows a
-	 * stopped strip never reached keep that same colour. */
+	 * assumes, so a stream this codec wrote decodes back to it. */
 	memset(px, (unsigned char)(invert ? 0xff : 0x00), (size_t)width * rows);
-	memset(imageline, (unsigned char)(invert ? 0xff : 0x00), width);
-
-	r.p = in;
-	r.len = inlen;
-	r.bitpos = 0;
-	a0 = -1;
-	colour = 0;
+	d.r.p = in;
+	d.r.len = inlen;
+	d.lastx = (int)width;
+	d.nruns = nruns;
+	d.curruns = d.runs;
+	d.refruns = d.runs + nruns;
+	d.refruns[0] = width;
+	d.refruns[1] = 0;
+	g4_build_tables();
 	for (y = 0; y < rows; y++) {
 		int n;
 
-		n = g4_decode_line(&r, px + (size_t)y * width,
-		    y == 0 ? imageline : px + (size_t)(y - 1) * width, width,
-		    invert, y == 0, &a0, &colour);
+		d.pa = d.curruns;
+		d.pb = d.refruns;
+		d.b1 = (int)*d.pb++;
+		d.a0 = 0;
+		d.RunLength = 0;
+		d.EOLcnt = 0;
+		n = g4_expand2d(&d);
 		if (n < 0)
 			goto fail;
-		if (n == 1)
+		/* A line that stops before it is finished is only painted when
+		 * some line was already painted: the reference reports the strip
+		 * as unreadable if the first one stops, and the caller then
+		 * hands back the imaginary line everywhere rather than the runs
+		 * the stopped line left behind. */
+		if (y == 0 && (n == 1 || d.EOLcnt != 0))
 			break;
-		if (n == 0) {
-			/* An ordinary line ends where it was coded, so the
-			 * next one starts from the beginning again.  Only a
-			 * mark carries a line's position and colour over. */
-			a0 = -1;
-			colour = 0;
+		g4_fill(px + (size_t)y * width, d.curruns, d.pa, width, invert);
+		if (n == 1 || d.EOLcnt != 0)
+			break;
+		/* The imaginary change that closes the line, which the next
+		 * one reads as its reference. */
+		if (g4_setvalue(&d, 0) < 0)
+			goto fail;
+		{
+			uint32_t *t = d.curruns;
+
+			d.curruns = d.refruns;
+			d.refruns = t;
 		}
-		memcpy(imageline, px + (size_t)y * width, width);
 	}
 	if ((packed = g4_pack(px, width, rows)) == NULL)
 		goto fail;
-	free(imageline);
+	free(d.runs);
 	free(px);
 	*out = packed;
 	*outlen = ((size_t)width + 7) / 8 * (size_t)rows;
 	return 0;
 fail:
-	free(imageline);
+	free(d.runs);
 	free(px);
 	return -1;
 }

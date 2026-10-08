@@ -414,7 +414,8 @@ write_output(tu_fmt_t fmt, const tu_doc_t *d, const char *path,
 	 * question that was not asked.  RTF, RTFD and wordml are written in
 	 * UTF-8 whatever the text was decoded from, and the reference tool
 	 * leaves them there, so nothing is declined for them. */
-	if (enc == TU_ENC_UNSUPPORTED && (fmt == FMT_TXT || fmt == FMT_HTML)) {
+	if (enc == TU_ENC_UNSUPPORTED &&
+	    (fmt == FMT_TXT || fmt == FMT_HTML || fmt == FMT_WEBARCHIVE)) {
 		fprintf(stderr, "textutil: -encoding %s is not implemented\n",
 		    enc_given);
 		return -1;
@@ -426,6 +427,8 @@ write_output(tu_fmt_t fmt, const tu_doc_t *d, const char *path,
 		return tu_write_rtf(d, path, st, m);
 	case FMT_HTML:
 		return tu_write_html(d, path, st, m, enc);
+	case FMT_WEBARCHIVE:
+		return tu_write_webarchive(d, path, st, m, enc);
 	case FMT_RTFD:
 		return tu_write_rtfd(d, path, st, m);
 	case FMT_WORDML:

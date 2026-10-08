@@ -422,6 +422,39 @@ format whose name is not the extension an output file of it is given.
 The one thing this writer cannot reproduce is anything the *reader* recorded
 about the document rather than its text; see the divergences below.
 
+## Web archive: the other root of an HTML page is a binary property list
+
+`webarchive` holds the document as the other root of an HTML page: the very
+HTML the `html` writer produces, taken whole as a data blob. So the two
+writers share the HTML side end to end — the encoding is applied to it before
+it is embedded, the `-title` and the other metadata ride inside it, and every
+shape of document comes out byte for byte what `-convert html` wrote, with the
+conversion's one-byte-wide output transcribed into the property list. The
+webarchive harness cases are therefore a stricter bound on the HTML writer
+than the html cases are, since each of them compares the HTML bytes *and* the
+container around them.
+
+The container is an Apple binary property list ("bplist00"), and a webarchive
+names no other resources, so its object graph is always the same thirteen
+objects in the same serialised order: a root dictionary of one pair whose string
+names the one surface, a flat dictionary of five pairs, the five keys
+(`WebResource URL`, `TextEncodingName`, `Data`, `MIMEType`, `FrameName`) laid
+down before their values, and the five values — the never-varying
+`file:///index.html`, the name of the document's encoding, the HTML itself, the
+never-varying `text/html`, and an empty string. Only the encoding name and the
+HTML data vary between archives.
+
+Serialised, an object is a marker byte, a length that folds into the marker
+when it fits and otherwise runs on ahead as a one-, two- or four-byte whole,
+and the object's bytes; a container is the marker and the item count, then its
+references as one byte each. The encoding name is a plain ASCII string, the
+HTML a data blob. After the objects an offset table lists each object's
+absolute position in the file, in as few bytes as the largest of them needs
+(two for an ordinary document, four once the HTML passes 64K), and a fixed
+32-byte trailer closes the file: six zero bytes, the two byte sizes, the
+thirteen-object count, the root's number zero, and the offset table's own
+position, each of the last four a big-endian whole of eight bytes.
+
 ## The embedding controls are a level the text is under, not a character
 
 `U+202A` to `U+202E` say which way the text they cover reads rather than being
@@ -603,12 +636,12 @@ These are the known points where this port does not do what the reference tool
 does. Most of them are a missing feature rather than a difference in output for
 a feature that exists on both sides.
 
-- **The remaining office containers are not written.** `doc`, `docx`, `odt` and
-  `webarchive` are recognised by the parser, and `-convert` with one of them
-  produces no file and a message naming the format. The reference tool writes
-  all three office containers. This is the largest remaining gap; the harness's
-  `recognised $fmt` cases pin the *parse* only, since a case that ran one of
-  these writers would be testing the writer rather than the parser.
+- **The remaining office containers are not written.** `doc`, `docx` and `odt`
+  are recognised by the parser, and `-convert` with one of them produces no file
+  and a message naming the format. The reference tool writes all three office
+  containers. This is the largest remaining gap; the harness's `recognised $fmt`
+  cases pin the *parse* only, since a case that ran one of these writers would
+  be testing the writer rather than the parser.
 - **A document's readers do not record its layout, so a document read as RTF
   or as HTML loses it.** The reference tool keeps what a rich text reader
   learned — the resolved default font (`Times` for HTML, `Helvetica` for RTF,
@@ -671,12 +704,12 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1113 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1181 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
 error cases, `-info` including the preview and BOM fixtures, `-stdin`, the
-`-cat` and `-convert` paths, all five writers, `-encoding` across the Unicode
+`-cat` and `-convert` paths, all six writers, `-encoding` across the Unicode
 family, `-format` validation and forcing, the read and write diagnostics, and
 the destination edge cases: a missing parent, an unwritable parent, a parent
 that is a file, a destination that is a directory, a bundle onto a directory
@@ -689,6 +722,15 @@ own, the three characters escaped and the quote that is not, the empty document,
 both metadata times, the font families and the sizes in half-points, and the
 naming of an output with no `-output` at all. They are plain text inputs, for
 the reason given in the divergences above.
+
+The webarchive cases run the whole fixture battery through the container: every
+paragraph shape, a level that decides the direction a line reads, each `-encoding`
+across the Unicode family (which pins the encoding name that rides in the
+archive as well as the HTML bytes it wraps), the metadata fields that open the
+info group, and `-stdin`. Since the container itself is deterministic, a
+`webarchive` case is the strictest of the comparisons: the HTML side is held to
+the reference byte for byte inside the archive, and the offset table and
+trailer are held to it too.
 
 The embedding controls are held to all three writers at once, by eight fixtures
 that cover a level around one stretch and round a whole paragraph, a level

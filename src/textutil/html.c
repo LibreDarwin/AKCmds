@@ -788,8 +788,8 @@ count_lines(const char *text, size_t len)
 }
 
 int
-tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
-    const tu_meta_t *meta, tu_encoding_t enc)
+tu_html_build(const tu_doc_t *d, const tu_style_t *st, const tu_meta_t *meta,
+    tu_encoding_t enc, char **out, size_t *outlen)
 {
 	(void)st;			/* the HTML writer takes no run options */
 	struct sink s = { NULL, 0, 0, 0 };
@@ -807,9 +807,8 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 	 * document first needed them, but a paragraph always starts and ends
 	 * with none of them open. */
 	struct html_embed embed = { NULL, NULL, 0, 0, 0, { 0, 0, 0, 0 }, 0 };
-	FILE *fp;
 	char *outbuf = NULL;
-	size_t outlen = 0;
+	size_t lenout = 0;
 
 	/* The body is built first, because the stylesheet lists the classes in
 	 * the order the paragraphs introduced them, and the stylesheet has to
@@ -970,20 +969,35 @@ tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
 
 	if (s.failed) {
 		free(s.buf);
-		tu_write_failed(path);
 		return -1;
 	}
 
 	/* The document is held whole, so -encoding is applied to it as one
 	 * piece: a wide encoding gets a mark and wide units, and the head and
 	 * tail markup travels with it. */
-	if (tu_encode_bytes(s.buf, s.len, enc, &outbuf, &outlen) != 0) {
+	if (tu_encode_bytes(s.buf, s.len, enc, &outbuf, &lenout) != 0) {
 		free(s.buf);
-		tu_write_failed(path);
 		return -1;
 	}
 	free(s.buf);
 
+	*out = outbuf;
+	*outlen = lenout;
+	return 0;
+}
+
+int
+tu_write_html(const tu_doc_t *d, const char *path, const tu_style_t *st,
+    const tu_meta_t *meta, tu_encoding_t enc)
+{
+	char *outbuf = NULL;
+	size_t outlen = 0;
+	FILE *fp;
+
+	if (tu_html_build(d, st, meta, enc, &outbuf, &outlen) != 0) {
+		tu_write_failed(path);
+		return -1;
+	}
 	if ((fp = fopen(path, "wb")) == NULL) {
 		free(outbuf);
 		tu_write_failed(path);

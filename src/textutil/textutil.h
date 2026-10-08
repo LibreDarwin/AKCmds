@@ -241,16 +241,23 @@ const char *tu_bidi_css(unsigned long cp);
 int tu_bidi_para(const unsigned char *p, size_t n);
 
 /* Writers.  Each returns 0 on success and -1 on failure, having already
- * reported the reason to stderr.  -encoding applies to the text and HTML
- * writers, which hold their whole output in memory and so encode it just
- * before writing; RTF and RTFD output is 7-bit by construction and the
- * reference tool leaves it in ASCII. */
+ * reported the reason to stderr.  -encoding applies to the text, HTML and web
+ * archive writers, which hold their whole output in memory and so encode it
+ * just before writing; RTF and RTFD output is 7-bit by construction and the
+ * reference tool leaves it in ASCII.  tu_html_build is the in-memory half of
+ * the HTML writer, which the web archive writer calls to get the page its
+ * archive wraps; it reports nothing on failure, and the caller names the
+ * destination instead. */
 int tu_write_txt(const tu_doc_t *d, const char *path, tu_encoding_t enc);
 int tu_write_rtf(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);
 int tu_write_rtfd(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);
 int tu_write_html(const tu_doc_t *d, const char *path,
+    const tu_style_t *st, const tu_meta_t *meta, tu_encoding_t enc);
+int tu_html_build(const tu_doc_t *d, const tu_style_t *st,
+    const tu_meta_t *meta, tu_encoding_t enc, char **out, size_t *outlen);
+int tu_write_webarchive(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta, tu_encoding_t enc);
 int tu_write_wordml(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);

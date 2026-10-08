@@ -16,8 +16,8 @@
 # helper, so python3 is not needed here.
 #
 # Scope.  This harness covers the plain text surface: the option parser, -info,
-# and the txt, rtf, rtfd, html and wordml writers.  The doc, docx, odt and
-# webarchive writers are recognised by the parser so that the option surface
+# and the txt, rtf, rtfd, html, wordml and webarchive writers.  The doc, docx
+# and odt writers are recognised by the parser so that the option surface
 # matches, but are not written by this port, so they are not compared here; see
 # src/textutil/NOTES.md.
 
@@ -682,6 +682,8 @@ check_stdin "stdin rtf font and size" "$S/plain" -convert rtf -stdin -font Couri
 check_stdin "stdin rtfd" "$S/plain" -convert rtfd -stdin
 check_stdin "stdin html" "$S/plain" -convert html -stdin
 check_stdin "stdin html title" "$S/plain" -convert html -stdin -title Hi
+check_stdin "stdin webarchive" "$S/plain" -convert webarchive -stdin
+check_stdin "stdin webarchive title" "$S/plain" -convert webarchive -stdin -title Hi
 check_stdin "stdin info" "$S/plain" -info -stdin
 check_stdin "stdin info two lines" "$S/plain" -info -stdin
 check_stdin "stdin bom" "$S/bom8" -convert txt -stdin -stdout
@@ -853,9 +855,9 @@ check "info html" -convert html -output b.html line2.txt
 check "info txt" -convert txt -output b2.txt line2.txt
 
 # ---------------------------------------------------------------------------
-# The four writers, over every fixture shape.
+# The five writers, over every fixture shape.
 # ---------------------------------------------------------------------------
-for fmt in txt rtf html rtfd; do
+for fmt in txt rtf html rtfd webarchive; do
     for f in line2 nonl empty one eol1 eol2 two3 n31 amp special blank \
              wsonly indent tabs accent cjk bom8 bom16le bom16be crlf \
              macutf8 macmix macall macrun maca9 macquote macutf8a9 macseq \
@@ -865,13 +867,16 @@ for fmt in txt rtf html rtfd; do
 done
 
 # Which way a line reads is a question the HTML writer answers for itself, and
-# the HTML writer is the only one held to the reference's answer here: the RTF
-# and WordML writers say a line reads right to left only when the text named it
-# with a mark, and a byte order mark is taken off the head of the text by the
-# reader of the text rather than by each writer.  So the three shapes that
-# settle all of this are checked against the HTML writer alone.
+# the HTML and webarchive writers are the only ones held to the reference's
+# answer here -- the webarchive writer holds the very HTML the HTML writer
+# writes, so the two share every one of these cases -- and the RTF and WordML
+# writers say a line reads right to left only when the text named it with a
+# mark, and a byte order mark is taken off the head of the text by the reader
+# of the text rather than by each writer.  So the three shapes that settle all
+# of this are checked against the HTML writer alone.
 for f in bidi bidionly bidiend; do
     check "convert html $f" -convert html "$f.txt"
+    check "convert webarchive $f" -convert webarchive "$f.txt"
 done
 
 # A mark at the head of a paragraph is how the RTF and WordML writers are told a
@@ -1121,11 +1126,11 @@ done
 PREP=''
 
 # ---------------------------------------------------------------------------
-# -encoding is applied to the text and HTML writers, and to nothing else: RTF
-# and RTFD output is 7-bit by construction, and -info writes no output.  Each
-# encoding is checked over input that has both a two byte and a four byte
-# character, so that the surrogate pair a supplementary character becomes in
-# UTF-16 is compared rather than assumed.
+# -encoding is applied to the text, HTML and webarchive writers, and to
+# nothing else: RTF and RTFD output is 7-bit by construction, and -info writes
+# no output.  Each encoding is checked over input that has both a two byte and
+# a four byte character, so that the surrogate pair a supplementary character
+# becomes in UTF-16 is compared rather than assumed.
 # ---------------------------------------------------------------------------
 for e in utf8 UTF-8 utf-16 UTF-16 utf-16le utf-16be utf-32 utf-32LE utf-32be \
          UtF-16 4 4x; do
@@ -1133,6 +1138,8 @@ for e in utf8 UTF-8 utf-16 UTF-16 utf-16le utf-16be utf-32 utf-32LE utf-32be \
     check "-encoding $e txt stdout" -convert txt -encoding "$e" -stdout cjk.txt
     check "-encoding $e cat" -cat txt -encoding "$e" -output out line2.txt cjk.txt
     check "-encoding $e html" -convert html -encoding "$e" -output out cjk.txt
+    check "-encoding $e webarchive" -convert webarchive -encoding "$e" \
+        -output out cjk.txt
     check "-encoding $e rtf" -convert rtf -encoding "$e" -output out cjk.txt
     check "-encoding $e rtfd" -convert rtfd -encoding "$e" -output out rtfd cjk.txt
     check "-encoding $e info" -encoding "$e" -info cjk.txt
@@ -1141,6 +1148,8 @@ done
 # that was asked for: "utf8" and the number 4 both come out as "utf-8".
 for e in utf8 utf-16 utf-16le utf-16be utf-32 utf-32le utf-32be 4; do
     check "-encoding $e html charset" -convert html -encoding "$e" -output out line2.txt
+    check "-encoding $e webarchive name" -convert webarchive -encoding "$e" \
+        -output out line2.txt
 done
 # A name that names no encoding at all is refused up front, ahead even of
 # -help, rather than answered with UTF-8 in its place.
@@ -1232,6 +1241,7 @@ for f in title author subject comment editor company; do
     check "-$f empty" -convert rtf -"$f" "" -output out line2.txt
     check "-$f rtfd" -convert rtfd -"$f" "value" -output out line2.txt
     check "-$f html" -convert html -"$f" "value" -output out line2.txt
+    check "-$f webarchive" -convert webarchive -"$f" "value" -output out line2.txt
     check "-$f txt" -convert txt -"$f" "value" -output out line2.txt
     check "-$f wordml" -convert wordml -"$f" "value" -output out line2.txt
     check "-$f wordml empty" -convert wordml -"$f" "" -output out line2.txt
@@ -1242,6 +1252,8 @@ check "info group order" -convert rtf -company C -editor E -comment M \
     -subject S -author A -title T -output out line2.txt
 check "info group order wordml" -convert wordml -company C -editor E \
     -comment M -subject S -author A -title T -output out line2.txt
+check "info group order webarchive" -convert webarchive -company C -editor E \
+    -comment M -subject S -author A -title T -output out line2.txt
 check "info group repeated" -convert rtf -title one -title two -output out line2.txt
 check "info group with empty document" -convert rtf -title T -output out zero
 check "info group with empty document wordml" -convert wordml -title T \
@@ -1251,6 +1263,9 @@ check "info group without a document wordml" -convert wordml -title T \
     -output out nosuchfile
 check "info group wordml times" -convert wordml -creationtime 2024-01-02T03:04:05Z \
     -modificationtime 2024-01-02T03:04:05Z -output out line2.txt
+check "info group webarchive times" -convert webarchive \
+    -creationtime 2024-01-02T03:04:05Z -modificationtime 2024-01-02T03:04:05Z \
+    -output out line2.txt
 
 # A value is escaped for RTF: the three characters with a meaning of their own,
 # and then everything above ASCII.  The code page 1252 characters are written as

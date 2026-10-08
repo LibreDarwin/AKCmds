@@ -44,7 +44,7 @@ TEXTUTIL_OBJS := $(OBJDIR)/textutil_main.o $(OBJDIR)/textutil_txt.o \
 	$(OBJDIR)/textutil_info.o \
 	$(OBJDIR)/textutil_format.o $(OBJDIR)/textutil_io.o \
 	$(OBJDIR)/textutil_font.o $(OBJDIR)/textutil_usage.o \
-	$(OBJDIR)/textutil_bidi.o
+	$(OBJDIR)/textutil_bidi.o $(OBJDIR)/textutil_webarchive.o
 
 TOPS_BIN := $(BUILD_DIR)/tops
 TOPS_OBJS := $(OBJDIR)/tops.o
@@ -117,6 +117,10 @@ $(OBJDIR)/textutil_rtfd.o: src/textutil/rtfd.c
 $(OBJDIR)/textutil_html.o: src/textutil/html.c
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ src/textutil/html.c
+
+$(OBJDIR)/textutil_webarchive.o: src/textutil/webarchive.c
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/webarchive.c
 
 $(OBJDIR)/textutil_wordml.o: src/textutil/wordml.c
 	@mkdir -p $(OBJDIR)

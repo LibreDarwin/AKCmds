@@ -747,9 +747,11 @@ pair_shown(const char *text, size_t len, size_t k)
 
 /* Where the line starting at pos ends, and how many bytes it occupies.  A
  * CR, an LF, a CRLF pair and a U+2029 each end a line and each count once, and
- * the levels and marks in between are of no account to which of them it is. */
-static size_t
-line_at(const char *text, size_t len, size_t pos, size_t *adv)
+ * the levels and marks in between are of no account to which of them it is.
+ * Shared with the docx and odt writers, which lay one paragraph per line and
+ * must agree with the HTML writer on where the lines are. */
+size_t
+tu_paragraph_at(const char *text, size_t len, size_t pos, size_t *adv)
 {
 	size_t i = line_shown(text, len, pos), end;
 	int sep;
@@ -771,16 +773,16 @@ line_at(const char *text, size_t len, size_t pos, size_t *adv)
 
 /* How many lines the text holds.  A trailing terminator closes the last line
  * rather than opening an empty one, so "a\n" is one line and "a\n\n" is
- * two: the second is empty. */
-static size_t
-count_lines(const char *text, size_t len)
+ * two: the second is empty.  Shared with the docx and odt writers. */
+size_t
+tu_paragraph_count(const char *text, size_t len)
 {
 	size_t n = 0, pos = 0, adv;
 
 	if (len == 0)
 		return 0;
 	while (pos < len) {
-		line_at(text, len, pos, &adv);
+		tu_paragraph_at(text, len, pos, &adv);
 		pos += adv;
 		n++;
 	}
@@ -795,7 +797,7 @@ tu_html_build(const tu_doc_t *d, const tu_style_t *st, const tu_meta_t *meta,
 	struct sink s = { NULL, 0, 0, 0 };
 	struct sink body = { NULL, 0, 0, 0 };
 	const char *text = d->text;
-	size_t len = d->len, pos = 0, want = count_lines(text, len);
+	size_t len = d->len, pos = 0, want = tu_paragraph_count(text, len);
 	size_t n = 0;
 	/* Class numbers are handed out in order of first use, so a document of
 	 * nothing but blank lines calls the first of them p1.  Format 0 is a
@@ -814,7 +816,7 @@ tu_html_build(const tu_doc_t *d, const tu_style_t *st, const tu_meta_t *meta,
 	 * the order the paragraphs introduced them, and the stylesheet has to
 	 * close before <body> can open. */
 	while (n < want) {
-		size_t adv, linelen = line_at(text, len, pos, &adv);
+		size_t adv, linelen = tu_paragraph_at(text, len, pos, &adv);
 		size_t mark, shown;
 		int blank = 1, fmt, c, rtl, drop, vis;
 

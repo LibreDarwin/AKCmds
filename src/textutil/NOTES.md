@@ -11,10 +11,10 @@ compares exit status, both streams, and every byte produced.
 
 ## Scope
 
-This port reads plain text and writes `txt`, `rtf`, `rtfd` and `html`. It
-recognises the other five format names so that the option surface matches, but
-does not write them, and it has no readers but plain text. The divergences that
-follow from that are listed together at the end.
+This port reads plain text and writes `txt`, `rtf`, `rtfd`, `html`, `wordml`,
+`webarchive`, `docx` and `odt`. It also recognises `doc` so that the option
+surface matches, but does not write it, and it has no readers but plain text.
+The divergences that follow from that are listed together at the end.
 
 ## -info counts UTF-16 code units, and previews the same 30 of them
 
@@ -455,6 +455,61 @@ absolute position in the file, in as few bytes as the largest of them needs
 thirteen-object count, the root's number zero, and the offset table's own
 position, each of the last four a big-endian whole of eight bytes.
 
+## The office containers: docx and odt
+
+`docx` and `odt` are both a ZIP archive of a fixed set of members: docx holds
+eight (the content types, the two rels members, `word/document.xml`, the theme,
+and the three `docProps` members), odt five, of which `mimetype` is stored
+uncompressed — the format's one demand on the archive, and the only member any
+of the two containers compresses differently. Every member is a fixed byte
+string except the one that holds the document, so once the ZIP scaffolding was
+agreed the question was only the two XML members. The one difference the battery
+found that was not in the document is a difference in the run: every entry in a
+ZIP archive carries, in its local header and again in the central directory, a
+DOS time that is the wall clock of the run, and the two tools run on different
+clocks. The harness normalises the four bytes of each entry's time in both
+trees before comparing, with the `python3` `zipfix` that is the suite's only
+use of the interpreter.
+
+`docx` is the WordML document in a container, and `word/document.xml` is that
+document with names spelled the container's way and nothing structural lost:
+the same paragraph marks and pairing, the same opening mark taken into the
+paragraph's `w:pPr` as a `w:bidi` when it names a direction — and, as in wordml,
+nothing written when it names the direction the paragraph already had — the same
+bare `<w:p></w:p>` for a document that has no text at all, and the same run:
+`w:rFonts` naming the family `-font` resolved in all three slots, `w:sz` and
+`w:sz-cs` at twice the size, bold and italic after them in that order, a `w:t`
+with `xml:space="preserve"` around every piece of text whether or not it is
+empty, and the tab, the form feed as a page break, and `U+2028` as a break
+written between the pieces. What is spelled differently from wordml is `w:hAnsi`
+in camel case (wordml writes `w:h-ansi`) and the absence of the `wx:` namespace
+font element — two spellings the format claims, not differences of behaviour.
+Only a plain text document is compared, for the same reason as the wordml
+harness cases: a document read as RTF or HTML carries the reader's resolved
+default font and page setup, which this port's readers do not record.
+
+`odt`'s `content.xml` is where the two containers separate. The paragraph model
+is the wordml model, held to it by the same fixtures, but everything that is
+not text is taken out of the paragraph *before* the rest is encoded, which is
+not quite the same as being written into a span the way the markup writers write
+it. An embedding control anywhere in a paragraph is dropped — the odt format
+records no direction of its own — and with it a NUL or any C0 control but a
+tab, and the dropping happens before the spaces are counted: a level or a NUL
+between two spaces is not part of the text, but the spaces either side of it
+are one run, and a run that the dropping leaves at the head of the paragraph is
+written whole even though something the reader was not shown came before it. A
+paragraph is `text:p` with the P1 style, a tab is `text:tab`, `U+2028` is
+`text:line-break`, and each of those two opens the next run of spaces whole;
+elsewhere a run of spaces is the first space written plain and the rest as
+`text:s` — or, at the head, the whole run as one `text:s` with its `text:c`
+count the size of the run. The `style:font-face` declaration, the P1 style in
+the automatic styles, and the paragraphs themselves are written together or not
+at all: a document of nothing, or of nothing but directions, leaves all three
+out and its `office:text` empty. `odt` ignores `-font` and `-fontsize`; the
+`-title` and `-author` groups ride in `meta.xml` (docx carries them in its
+`docProps` members). Both writers name the default output beside the input with
+the format's extension, unlike wordml's `in.xml`.
+
 ## The embedding controls are a level the text is under, not a character
 
 `U+202A` to `U+202E` say which way the text they cover reads rather than being
@@ -636,12 +691,12 @@ These are the known points where this port does not do what the reference tool
 does. Most of them are a missing feature rather than a difference in output for
 a feature that exists on both sides.
 
-- **The remaining office containers are not written.** `doc`, `docx` and `odt`
-  are recognised by the parser, and `-convert` with one of them produces no file
-  and a message naming the format. The reference tool writes all three office
-  containers. This is the largest remaining gap; the harness's `recognised $fmt`
-  cases pin the *parse* only, since a case that ran one of these writers would
-  be testing the writer rather than the parser.
+- **`doc`, the old Word binary format, is not written.** It is recognised by
+  the parser, so `-format doc` is accepted, but `-convert doc` produces no file
+  and a message naming the format. The reference tool writes it along with the
+  two office containers this port now writes. This is the one office container
+  left; the harness's `recognised doc` cases pin the *parse* only, since a case
+  that ran the writer would be testing the writer rather than the parser.
 - **A document's readers do not record its layout, so a document read as RTF
   or as HTML loses it.** The reference tool keeps what a rich text reader
   learned — the resolved default font (`Times` for HTML, `Helvetica` for RTF,
@@ -704,12 +759,12 @@ a feature that exists on both sides.
 
 ## Coverage
 
-`tests/textutil-parity.sh` is at 1181 checks, and passes in full against the
+`tests/textutil-parity.sh` is at 1366 checks, and passes in full against the
 release, debug and ASan/UBSan builds. The suite compares exit status, stdout,
 stderr, and the bytes of every file and directory produced, so a missing output
 is caught as well as a differing one. It covers the option parser and its
 error cases, `-info` including the preview and BOM fixtures, `-stdin`, the
-`-cat` and `-convert` paths, all six writers, `-encoding` across the Unicode
+`-cat` and `-convert` paths, all eight writers, `-encoding` across the Unicode
 family, `-format` validation and forcing, the read and write diagnostics, and
 the destination edge cases: a missing parent, an unwritable parent, a parent
 that is a file, a destination that is a directory, a bundle onto a directory
@@ -731,6 +786,22 @@ info group, and `-stdin`. Since the container itself is deterministic, a
 `webarchive` case is the strictest of the comparisons: the HTML side is held to
 the reference byte for byte inside the archive, and the offset table and
 trailer are held to it too.
+
+The docx and odt cases take the wordml fixture set through both containers and
+add the direction fixtures that the wordml cases alone do not settle: a line's
+direction in a bidi run, the embedding controls, the mark that names a
+paragraph's direction, the pair shapes, and the NUL and control runs among
+blanks — everything, in short, that the two paragraphs of the notes above
+describe. The two writers answer with the same paragraph model and with their
+own way of encoding what survives, and each is held to the reference byte for
+byte. The one thing the comparison takes out is the DOS time every entry of a
+ZIP archive carries in its own clock: `check_zip` zeroes those four bytes in
+both trees before comparing, by the `zipfix` helper that is the suite's only
+use of `python3`. The named cases cover the default name beside the input, the
+escaped characters, the `-title` and `-author` metadata groups that ride in
+each container's own member, the docx run properties from `-font` and
+`-fontsize`, and the empty document, which for odt leaves the font-face, the
+P1 style and every paragraph out entirely.
 
 The embedding controls are held to all three writers at once, by eight fixtures
 that cover a level around one stretch and round a whole paragraph, a level

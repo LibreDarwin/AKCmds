@@ -261,6 +261,19 @@ int tu_write_webarchive(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta, tu_encoding_t enc);
 int tu_write_wordml(const tu_doc_t *d, const char *path,
     const tu_style_t *st, const tu_meta_t *meta);
+int tu_write_docx(const tu_doc_t *d, const char *path,
+    const tu_style_t *st, const tu_meta_t *meta);
+int tu_write_odt(const tu_doc_t *d, const char *path,
+    const tu_style_t *st, const tu_meta_t *meta);
+
+/* The line model the HTML writer uses to lay one paragraph per line; the
+ * docx and odt writers use it too, so the three agree on where the
+ * paragraphs are.  tu_paragraph_at reports the length of the line starting
+ * at pos (its terminator not counted) and, in adv, how many bytes the line
+ * and its terminator occupy.  See src/textutil/html.c. */
+size_t tu_paragraph_count(const char *text, size_t len);
+size_t tu_paragraph_at(const char *text, size_t len, size_t pos,
+    size_t *adv);
 
 /* The -font database, shared by the writers that resolve one.  See
  * src/textutil/font.c. */

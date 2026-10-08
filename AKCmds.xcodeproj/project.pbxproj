@@ -110,6 +110,12 @@
 		A3B00001000000000000009 /* textutil.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = textutil.h; sourceTree = "<group>"; };
 		A3B0000100000000000000A /* font.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = font.c; sourceTree = "<group>"; };
 		A3B0000100000000000000B /* wordml.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = wordml.c; sourceTree = "<group>"; };
+		A3C0000100000000000000000C /* bidi.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = bidi.c; sourceTree = "<group>"; };
+		A3C0000100000000000000000D /* webarchive.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = webarchive.c; sourceTree = "<group>"; };
+		A3C0000100000000000000000E /* zip.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = zip.c; sourceTree = "<group>"; };
+		A3C0000100000000000000000F /* docx.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = docx.c; sourceTree = "<group>"; };
+		A3C00001000000000000000010 /* odt.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = odt.c; sourceTree = "<group>"; };
+		A3C00001000000000000000011 /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
 A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = format.c; sourceTree = "<group>"; };
 		A3B00001000000000000001 /* html.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = html.c; sourceTree = "<group>"; };
 		A3B00001000000000000002 /* info.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = info.c; sourceTree = "<group>"; };
@@ -250,6 +256,7 @@ A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileT
 				A40000010000000000000006 /* ApplicationServices.framework */,
 				A40000010000000000000007 /* CoreServices.framework */,
 				A40000010000000000000008 /* ImageIO.framework */,
+				A3C00001000000000000000011 /* libz.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -300,6 +307,11 @@ A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileT
 				A3B00001000000000000007 /* txt.c */,
 				A3B00001000000000000008 /* usage.c */,
 				A3B0000100000000000000B /* wordml.c */,
+				A3C0000100000000000000000C /* bidi.c */,
+				A3C0000100000000000000000D /* webarchive.c */,
+				A3C0000100000000000000000E /* zip.c */,
+				A3C0000100000000000000000F /* docx.c */,
+				A3C00001000000000000000010 /* odt.c */,
 				A3B00001000000000000009 /* textutil.h */,
 			);
 			path = textutil;
@@ -511,6 +523,12 @@ A3B00001000000000000000 /* format.c */ = {isa = PBXFileReference; lastKnownFileT
 
 		A1B0000100000000000000A /* font.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B0000100000000000000A /* font.c */; };
 		A1B0000100000000000000B /* wordml.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B0000100000000000000B /* wordml.c */; };
+		A1C0000100000000000000000C /* bidi.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C0000100000000000000000C /* bidi.c */; };
+		A1C0000100000000000000000D /* webarchive.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C0000100000000000000000D /* webarchive.c */; };
+		A1C0000100000000000000000E /* zip.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C0000100000000000000000E /* zip.c */; };
+		A1C0000100000000000000000F /* docx.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C0000100000000000000000F /* docx.c */; };
+		A1C00001000000000000000010 /* odt.c in Sources */ = {isa = PBXBuildFile; fileRef = A3C00001000000000000000010 /* odt.c */; };
+		A1C00001000000000000000011 /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A3C00001000000000000000011 /* libz.tbd */; };
 A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000000 /* format.c */; };
 		A1B00001000000000000001 /* html.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000001 /* html.c */; };
 		A1B00001000000000000002 /* info.c in Sources */ = {isa = PBXBuildFile; fileRef = A3B00001000000000000002 /* info.c */; };
@@ -535,6 +553,11 @@ A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef
 				A1B00001000000000000007 /* txt.c in Sources */,
 				A1B00001000000000000008 /* usage.c in Sources */,
 				A1B0000100000000000000B /* wordml.c in Sources */,
+				A1C0000100000000000000000C /* bidi.c in Sources */,
+				A1C0000100000000000000000D /* webarchive.c in Sources */,
+				A1C0000100000000000000000E /* zip.c in Sources */,
+				A1C0000100000000000000000F /* docx.c in Sources */,
+				A1C00001000000000000000010 /* odt.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,6 +565,7 @@ A1B00001000000000000000 /* format.c in Sources */ = {isa = PBXBuildFile; fileRef
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1C00001000000000000000011 /* libz.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -41,6 +41,8 @@ TEXTUTIL_BIN := $(BUILD_DIR)/textutil
 TEXTUTIL_OBJS := $(OBJDIR)/textutil_main.o $(OBJDIR)/textutil_txt.o \
 	$(OBJDIR)/textutil_rtf.o $(OBJDIR)/textutil_rtfd.o \
 	$(OBJDIR)/textutil_html.o $(OBJDIR)/textutil_wordml.o \
+	$(OBJDIR)/textutil_docx.o $(OBJDIR)/textutil_odt.o \
+	$(OBJDIR)/textutil_zip.o \
 	$(OBJDIR)/textutil_info.o \
 	$(OBJDIR)/textutil_format.o $(OBJDIR)/textutil_io.o \
 	$(OBJDIR)/textutil_font.o $(OBJDIR)/textutil_usage.o \
@@ -96,7 +98,7 @@ $(OBJDIR)/tiff2icns.o: src/tiff2icns/tiff2icns.m
 # tools have a main.c and share the object directory.
 $(TEXTUTIL_BIN): $(TEXTUTIL_OBJS)
 	@mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $(TEXTUTIL_OBJS)
+	$(CC) $(CFLAGS) -o $@ $(TEXTUTIL_OBJS) -lz
 
 $(OBJDIR)/textutil_main.o: src/textutil/main.c
 	@mkdir -p $(OBJDIR)
@@ -125,6 +127,20 @@ $(OBJDIR)/textutil_webarchive.o: src/textutil/webarchive.c
 $(OBJDIR)/textutil_wordml.o: src/textutil/wordml.c
 	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -c -o $@ src/textutil/wordml.c
+
+$(OBJDIR)/textutil_docx.o: src/textutil/docx.c src/textutil/docx_static.h \
+	src/textutil/zip.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/docx.c
+
+$(OBJDIR)/textutil_odt.o: src/textutil/odt.c src/textutil/odt_static.h \
+	src/textutil/zip.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/odt.c
+
+$(OBJDIR)/textutil_zip.o: src/textutil/zip.c src/textutil/zip.h
+	@mkdir -p $(OBJDIR)
+	$(CC) $(CFLAGS) -c -o $@ src/textutil/zip.c
 
 $(OBJDIR)/textutil_info.o: src/textutil/info.c
 	@mkdir -p $(OBJDIR)

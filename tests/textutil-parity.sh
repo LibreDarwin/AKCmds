@@ -13,12 +13,13 @@
 # compare against a different reference build.
 #
 # Requires bash.  The fixtures are laid down with printf and a small repeat
-# helper, so python3 is not needed here.
+# helper.  python3 is needed only by the docx and odt cases, whose ZIP
+# timestamps are normalized before the comparison; see zipfix below.
 #
 # Scope.  This harness covers the plain text surface: the option parser, -info,
-# and the txt, rtf, rtfd, html, wordml and webarchive writers.  The doc, docx
-# and odt writers are recognised by the parser so that the option surface
-# matches, but are not written by this port, so they are not compared here; see
+# and the txt, rtf, rtfd, html, wordml, webarchive, docx and odt writers.  The
+# doc writer is recognised by the parser so that the option surface matches,
+# but is not written by this port, so it is not compared here; see
 # src/textutil/NOTES.md.
 
 ORACLE=${ORACLE:-/usr/bin/textutil}
@@ -47,8 +48,60 @@ PASS=0
 FAIL=0
 FAILED=""
 
+# NORMALIZE, when set, is run inside each of the two case trees after the tool
+# and before anything is compared, for an output whose bytes hold a value that
+# is not a property of the document.  The office containers are ZIP archives
+# and every entry in one carries the DOS time it was written at, which is the
+# wall clock of the run rather than anything the text said, so the two tools
+# can never agree on those four bytes.  zipfix zeroes them in place, in the
+# local header and in the central directory, and what is left is everything
+# else in the archive -- which is the whole of the comparison, since the
+# battery found no other difference.  Only the docx and odt cases set it, and
+# they are the only ones that need python3.
+NORMALIZE=""
+if command -v python3 >/dev/null 2>&1; then
+    HAVE_PY=1
+else
+    HAVE_PY=0
+fi
+cat >"$ROOT/zipfix.py" <<'PYEOF'
+import os, struct, sys
+for root, dirs, files in os.walk(sys.argv[1]):
+    for name in files:
+        if not (name.endswith(".docx") or name.endswith(".odt")):
+            continue
+        path = os.path.join(root, name)
+        b = bytearray(open(path, "rb").read())
+        eocd = b.rfind(b"PK\x05\x06")
+        if eocd < 0:
+            continue
+        cd_off = struct.unpack_from("<I", b, eocd + 16)[0]
+        cd_len = struct.unpack_from("<I", b, eocd + 12)[0]
+        pos = cd_off
+        end = cd_off + cd_len
+        while pos < end:
+            if struct.unpack_from("<I", b, pos)[0] != 0x02014b50:
+                break
+            local = struct.unpack_from("<I", b, pos + 42)[0]
+            b[pos + 12:pos + 16] = b"\0" * 4
+            b[local + 10:local + 14] = b"\0" * 4
+            n, m, c = struct.unpack_from("<HHH", b, pos + 28)
+            pos += 46 + n + m + c
+        open(path, "wb").write(bytes(b))
+PYEOF
+zipfix() {
+    python3 "$ROOT/zipfix.py" .
+}
+
 check_read() {
     READFIX="mkread" check "$@"
+}
+
+# check_zip is check with the ZIP timestamps taken out of the comparison, for
+# the two office containers.  Everything else about the case is compared as it
+# is everywhere else, bytes included.
+check_zip() {
+    NORMALIZE='zipfix' check "$@"
 }
 
 # rep <char> <count>: a run of one character, used to build the fixtures that
@@ -562,6 +615,11 @@ check() {
     ( cd "$o/run" && "$ORACLE" "$@" >o.out 2>o.err; echo $? >o.rc )
     ( cd "$m/run" && "$MY" "$@" >o.out 2>o.err; echo $? >o.rc )
 
+    if [ -n "$NORMALIZE" ]; then
+        ( cd "$o/run" && eval "$NORMALIZE" )
+        ( cd "$m/run" && eval "$NORMALIZE" )
+    fi
+
     local why=""
 
     if ! cmp -s "$o/run/o.rc" "$m/run/o.rc"; then
@@ -621,6 +679,11 @@ check_stdin() {
 
     ( cd "$o/run" && "$ORACLE" "$@" <"$src" >o.out 2>o.err; echo $? >o.rc )
     ( cd "$m/run" && "$MY" "$@" <"$src" >o.out 2>o.err; echo $? >o.rc )
+
+    if [ -n "$NORMALIZE" ]; then
+        ( cd "$o/run" && eval "$NORMALIZE" )
+        ( cd "$m/run" && eval "$NORMALIZE" )
+    fi
 
     local why=""
 
@@ -1232,6 +1295,78 @@ check "wordml from a directory" -convert wordml -output out adir
 # only the plain text cases above are compared here, for the same reason the
 # office containers are not; see src/textutil/NOTES.md.
 PREP=''
+
+# ---------------------------------------------------------------------------
+# The two office containers, docx and odt.  Good plain text is read
+# identically, so the fixtures that settled the wordml writer are held to both
+# of them here, and so are everything across the boundary the wordml cases
+# leave alone: a line's direction in a bidi run, the embedding controls, the
+# mark that names a paragraph's direction, the pair shapes, and the NUL and
+# control runs among blanks.  The paragraph model is the wordml model -- same
+# marks, same pairing, same opening mark taken out of the head -- so those
+# fixtures pin where the two writers agree against the reference tool, and the
+# direction fixtures pin where they are each held to the reference's own
+# answer.  The comparison is check_zip for the reasons given beside zipfix
+# above; the DOS times are the only thing not compared.
+# ---------------------------------------------------------------------------
+if [ "$HAVE_PY" -eq 1 ]; then
+    for fmt in docx odt; do
+        for f in one nonl line2 empty eol1 eol2 two3 blank wsonly indent tabs \
+                 tabonly tabends special amp accent cjk crlf cronly crlfnl lfcr \
+                 lfcrend ls ps lsonly psonly ls2 ps2 macutf8 macmix macall macrun \
+                 maca9 macquote macutf8a9 macseq macoverlong bommac boma9 ctl \
+                 spcrun spcblank spctab; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in bidi bidionly bidiend; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in bidimark bidimarkhead bidimarktwice; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in embedone embedall embednest embedmerge embedtwo embedopen \
+                 embedpage embedpage2; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in markctlhead markctlmid marktwopara markonlyhead markcr \
+                 markcrlf markps markls; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in markinpair markinpairrlm ctlpair pairctl2 pairmarkctl \
+                 pairmarkalm pairctlmark pairmark2; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in nulrearm nulrearmthree nulrearmat nulrearmtail; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+        for f in ctlrearmword ctlrearmtwo ctlrearmindent ctlrearmtabgap \
+                 ctlrearmlevel ctlrearmtail ctlrearmbs lvlrearmclosemark \
+                 lvlrearmclosenul lvlrearmcloseemoji lvlrearmcloseends; do
+            check_zip "convert $fmt $f" -convert "$fmt" "$f.txt"
+        done
+    done
+    # The output the format names, and the characters escaped in the document.
+    check_zip "docx default name" -convert docx one.txt
+    check_zip "odt default name" -convert odt one.txt
+    check_zip "docx escapes" -convert docx -output out amp.txt
+    check_zip "odt escapes" -convert odt -output out amp.txt
+    # The -title and -author groups, which docx and odt each carry in their own
+    # member, and the docx run properties from -font and -fontsize, in the
+    # saved case to keep the whole archive against the loop above.
+    check_zip "docx title and author" -convert docx -output out -title T \
+        -author A one.txt
+    check_zip "odt title and author" -convert odt -output out -title T \
+        -author A one.txt
+    check_zip "docx font and size" -convert docx -output out -font Arial \
+        -fontsize 30 one.txt
+    # The empty document, which leaves the container's styles out: the case
+    # where the two writers are held to the difference between an empty text
+    # and a paragraph of nothing.
+    check_zip "docx empty" -convert docx -output out empty.txt
+    check_zip "odt empty" -convert odt -output out empty.txt
+else
+    echo "note: python3 not found; skipping docx and odt writer cases"
+fi
 
 # The metadata options.  Each one opens the info group between the envelope and
 # the paragraph, and the group is written for an empty value too: an empty

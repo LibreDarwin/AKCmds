@@ -433,6 +433,10 @@ write_output(tu_fmt_t fmt, const tu_doc_t *d, const char *path,
 		return tu_write_rtfd(d, path, st, m);
 	case FMT_WORDML:
 		return tu_write_wordml(d, path, st, m);
+	case FMT_DOCX:
+		return tu_write_docx(d, path, st, m);
+	case FMT_ODT:
+		return tu_write_odt(d, path, st, m);
 	default:
 		/* Recognised so that the parser matches, but not written by this
 		 * port; see src/textutil/NOTES.md. */
